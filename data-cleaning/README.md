@@ -1,6 +1,6 @@
 # Data cleaning
 
-Part of the [HealthASR](https://github.com/Sonlowami/HealthASR) repository — this directory handles dataset cleaning, preprocessing, feature extraction, and augmentation. It sits alongside `tokenizers/`; see that folder for tokenizer training and NeMo manifest conversion.
+This directory handles dataset cleaning, preprocessing, feature extraction, and augmentation. 
 
 Multilingual ASR data pipeline for Kidaw'ida, Kinyarwanda, and Swahili .
 
