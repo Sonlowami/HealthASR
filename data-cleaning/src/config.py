@@ -29,7 +29,7 @@ LANGUAGES = {
 SPLITS = ("train", "dev", "test")
 
 # Cleaning: clips shorter than this are removed
-MIN_DURATION_SEC = 3.0
+MIN_DURATION_SEC = 2.0
 
 # Preprocessing + features (standard ASR settings)
 SAMPLE_RATE = 16_000   # Hz — Whisper / Conformer expect 16 kHz
