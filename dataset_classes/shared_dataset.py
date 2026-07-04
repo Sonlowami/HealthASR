@@ -375,6 +375,7 @@ class SharedASRDataset(Dataset):
                 token_ids_list.append(tokenizer.text_to_ids(item["text"]))
     
         input_features, feature_lengths = cls._pad_features(processed_features)
+        input_features = input_features.transpose(1, 2).contiguous()
         labels, label_lengths = cls._pad_labels(
             token_ids_list,
             pad_id=getattr(tokenizer, "pad_id", 0),
@@ -451,5 +452,5 @@ if __name__ == "__main__":
     print(f"Iterating over DataLoader...")
     for batch in nemo_loader:
         print(f"Batch keys: {list(vars(batch).keys())}")
-        print(f"Batch shapes: {{k: v.shape for k, v in batch.items()}}")
+        print(f"Batch shapes:", batch._outs[0].shape)
         break  # Just test one batch
