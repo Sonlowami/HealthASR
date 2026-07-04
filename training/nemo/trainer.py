@@ -170,10 +170,20 @@ def train_nemo(
 
     def _transfer_batch_to_device(self, batch, device, dataloader_idx: int = 0):
         if isinstance(batch, DALIOutputs):
+            self._healthasr_last_batch_size = int(batch._outs[0].shape[0])
             return _transfer_dali_outputs_to_device(batch, device)
         return batch
 
     type(model).transfer_batch_to_device = _transfer_batch_to_device
+
+    original_log = model.log
+
+    def _log_with_default_batch_size(*args, **kwargs):
+        if args and args[0] == "global_step" and "batch_size" not in kwargs:
+            kwargs["batch_size"] = getattr(model, "_healthasr_last_batch_size", 1)
+        return original_log(*args, **kwargs)
+
+    model.log = _log_with_default_batch_size
 
     # 5) Train
     # NOTE: for NeMo ASR models, trainer.fit(model) is usually enough after setup_* calls.
