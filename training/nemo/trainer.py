@@ -1,5 +1,4 @@
 import os
-from types import MethodType
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -174,7 +173,7 @@ def train_nemo(
             return _transfer_dali_outputs_to_device(batch, device)
         return batch
 
-    model.transfer_batch_to_device = MethodType(_transfer_batch_to_device, model)
+    type(model).transfer_batch_to_device = _transfer_batch_to_device
 
     # 5) Train
     # NOTE: for NeMo ASR models, trainer.fit(model) is usually enough after setup_* calls.
