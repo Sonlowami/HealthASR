@@ -1,9 +1,12 @@
 import os
+from types import MethodType
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import lightning.pytorch as pl
+import torch
 from omegaconf import DictConfig, OmegaConf
+from nemo.collections.asr.data.audio_to_text_dali import DALIOutputs
 from nemo.utils.exp_manager import exp_manager
 
 
@@ -110,6 +113,24 @@ def create_trainer(cfg: DictConfig) -> pl.Trainer:
     return trainer
 
 
+def _transfer_dali_outputs_to_device(batch: DALIOutputs, device: torch.device) -> DALIOutputs:
+    if batch.has_processed_signal:
+        payload = {
+            "processed_signal": batch[0].to(device, non_blocking=True),
+            "processed_signal_len": batch[1].to(device, non_blocking=True),
+            "transcript": batch[2].to(device, non_blocking=True),
+            "transcript_len": batch[3].to(device, non_blocking=True),
+        }
+    else:
+        payload = {
+            "audio": batch[0].to(device, non_blocking=True),
+            "audio_len": batch[1].to(device, non_blocking=True),
+            "transcript": batch[2].to(device, non_blocking=True),
+            "transcript_len": batch[3].to(device, non_blocking=True),
+        }
+    return DALIOutputs(payload)
+
+
 def train_nemo(
     model,
     model_cfg: DictConfig,
@@ -147,6 +168,13 @@ def train_nemo(
     # 4) Optimizer
     nemo_cfg.optim = OmegaConf.create(model_cfg.model.optim)
     model.setup_optimization(optim_config=nemo_cfg.optim)
+
+    def _transfer_batch_to_device(self, batch, device, dataloader_idx: int = 0):
+        if isinstance(batch, DALIOutputs):
+            return _transfer_dali_outputs_to_device(batch, device)
+        return batch
+
+    model.transfer_batch_to_device = MethodType(_transfer_batch_to_device, model)
 
     # 5) Train
     # NOTE: for NeMo ASR models, trainer.fit(model) is usually enough after setup_* calls.

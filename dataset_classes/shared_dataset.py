@@ -383,10 +383,10 @@ class SharedASRDataset(Dataset):
         )
     
         return DALIOutputs({
-            'processed_signal': input_features,
-            'processed_signal_len': feature_lengths,
-            'transcript': labels,
-            'transcript_len': label_lengths,
+            "processed_signal": input_features,
+            "processed_signal_len": feature_lengths,
+            "transcript": labels,
+            "transcript_len": label_lengths,
         })
 
     @staticmethod
