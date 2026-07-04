@@ -127,7 +127,8 @@ def main() -> str:
 	)
 
 	model = EncDecCTCModelBPE.from_pretrained(model_name)
-	model.change_vocabulary(tokenizer=tokenizer, new_tokenizer_dir=args.tokenizer_dir)
+	model.spec_augmentation = None  # Disable NeMo's built-in SpecAugment, since we handle augmentation in the dataset.
+	#model.change_vocabulary(new_tokenizer_type=tokenizer, new_tokenizer_dir=args.tokenizer_dir)
 
 	trainer = create_trainer(cfg)
 	exp_dir = train_nemo(
