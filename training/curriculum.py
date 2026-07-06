@@ -29,7 +29,7 @@ def rank_samples_by_wer(model, dataloader, tokenizer) -> List[RankedSample]:
 
             if batch.has_processed_signal:
                 signal = batch[0].to(device, non_blocking=True)
-                signal_len = batch[1]
+                signal_len = batch[1].to(device, non_blocking=True)
                 references = batch[2].to(device, non_blocking=True)
                 reference_len = batch[3].to(device, non_blocking=True)
                 _, encoded_len, greedy_predictions = model.forward(
