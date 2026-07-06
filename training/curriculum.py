@@ -13,6 +13,15 @@ class RankedSample:
     sample_id: int
     wer: float
 
+def ctc_collapse(ids, blank_id):
+    out = []
+    prev = None
+    for i in ids:
+        if i != blank_id and i != prev:
+            out.append(i)
+        prev = i
+    return out
+
 
 def rank_samples_by_wer(model, dataloader, tokenizer) -> List[RankedSample]:
     """Rank samples in ascending WER using an already-loaded ASR model."""
@@ -47,6 +56,7 @@ def rank_samples_by_wer(model, dataloader, tokenizer) -> List[RankedSample]:
             for row_idx, sample_id in enumerate(sample_ids):
                 ref_ids = references[row_idx][: int(reference_len[row_idx].item())].tolist()
                 hyp_ids = predicted_ids[row_idx][: int(encoded_len[row_idx].item())].tolist()
+                hyp_ids = ctc_collapse(hyp_ids, tokenizer.pad_token_id)
                 print(greedy_predictions.shape)
                 print(greedy_predictions[0][:50])
                 print("max pred:", greedy_predictions.max().item())
