@@ -47,7 +47,7 @@ def load_split(lang_dir: Path, split: str) -> tuple[pd.DataFrame, str]:
         elif ext == "jsonl":
             df = pd.read_json(path, lines=True)  # one JSON object per line
         else:
-            raw = json.loads(path.read_text())
+            raw = json.loads(path.read_text()).T
             # Support both [{...}, ...] and {"data": [...]} formats
             df = pd.DataFrame(raw if isinstance(raw, list) else raw.get("data", raw))
 
