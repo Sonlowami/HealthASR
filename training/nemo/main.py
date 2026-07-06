@@ -72,102 +72,160 @@ def _build_dataloader(
 		sampler=sampler,
 	)
 
-
 def main() -> str:
-	parser = build_arg_parser()
-	args = parser.parse_args()
+    parser = build_arg_parser()
+    args = parser.parse_args()
 
-	raw_cfg = load_config(args.config)
-	cfg = load_nemo_run_config(raw_cfg)
+    raw_cfg = load_config(args.config)
+    cfg = load_nemo_run_config(raw_cfg)
 
-	tokenizer_dir = Path(cfg.model.tokenizer.dir)
-	if not tokenizer_dir.exists():
-		raise FileNotFoundError(f"Tokenizer directory not found: {tokenizer_dir}")
+    tokenizer_dir = Path(cfg.model.tokenizer.dir)
+    if not tokenizer_dir.exists():
+        raise FileNotFoundError(f"Tokenizer directory not found: {tokenizer_dir}")
 
-	model_name = args.pretrained_model or cfg.model.get("init_from_pretrained_model")
-	if not model_name:
-		raise ValueError(
-			"Missing pretrained model name. Pass --pretrained-model or set config.model.init_from_pretrained_model."
-		)
+    model_name = args.pretrained_model or cfg.model.get("init_from_pretrained_model")
+    if not model_name:
+        raise ValueError(
+            "Missing pretrained model name. Pass --pretrained-model or set "
+            "config.model.init_from_pretrained_model."
+        )
 
-	augmentation_cfg = cfg.get("augmentation", {})
-	train_dataset = SharedASRDataset(
-		manifest_schema_path=args.train_schema,
-		training=True,
-		feature_key=args.feature_key,
-		text_key=args.text_key,
-		feature_base_dir=args.feature_base_dir,
-		config={"augmentation": augmentation_cfg},
-	)
-	val_dataset = SharedASRDataset(
-		manifest_schema_path=args.val_schema,
-		training=False,
-		feature_key=args.feature_key,
-		text_key=args.text_key,
-		feature_base_dir=args.feature_base_dir,
-		config={"augmentation": augmentation_cfg},
-	)
+    augmentation_cfg = cfg.get("augmentation", {})
 
-	tokenizer = load_spt_tokenizer(args.tokenizer_dir)[0] if args.tokenizer_dir else None
+    train_dataset = SharedASRDataset(
+        manifest_schema_path=args.train_schema,
+        training=True,
+        feature_key=args.feature_key,
+        text_key=args.text_key,
+        feature_base_dir=args.feature_base_dir,
+        config={"augmentation": augmentation_cfg},
+    )
 
-	curriculum_cfg = cfg.get("curriculum", {})
-	curriculum_enabled = bool(curriculum_cfg.get("enabled", False))
+    val_dataset = SharedASRDataset(
+        manifest_schema_path=args.val_schema,
+        training=False,
+        feature_key=args.feature_key,
+        text_key=args.text_key,
+        feature_base_dir=args.feature_base_dir,
+        config={"augmentation": augmentation_cfg},
+    )
 
-	curriculum_sampler = None
-	if curriculum_enabled:
-		model = EncDecCTCModelBPE.from_pretrained(model_name)
-		model.spec_augmentation = None
+    tokenizer = (
+        load_spt_tokenizer(args.tokenizer_dir)[0]
+        if args.tokenizer_dir
+        else None
+    )
 
-		score_batch_size = int(curriculum_cfg.get("score_batch_size", args.val_batch_size))
-		score_loader = _build_dataloader(
-			train_dataset,
-			tokenizer=tokenizer,
-			batch_size=score_batch_size,
-			num_workers=args.num_workers,
-			pin_memory=args.pin_memory,
-			drop_last=False,
-			training=False,
-		)
-		ranked = rank_samples_by_wer(model, score_loader, tokenizer)
-		ordered_indices = [item.sample_id for item in ranked]
-		active_size = int(curriculum_cfg.get("active_size", 1.0) * len(ordered_indices))
-		curriculum_sampler = CurriculumSampler(ordered_indices, active_size=active_size)
-	else:
-		model = EncDecCTCModelBPE.from_pretrained(model_name)
-		model.spec_augmentation = None  # Disable NeMo's built-in SpecAugment, since we handle augmentation in the dataset.
+    # Load the model ONCE.
+    model = EncDecCTCModelBPE.from_pretrained(model_name)
+    model.spec_augmentation = None
 
-	train_loader = _build_dataloader(
-		train_dataset,
-		tokenizer=tokenizer,
-		batch_size=args.train_batch_size,
-		num_workers=args.num_workers,
-		pin_memory=args.pin_memory,
-		drop_last=args.drop_last,
-		training=True,
-		sampler=curriculum_sampler,
-	)
-	val_loader = _build_dataloader(
-		val_dataset,
-		tokenizer=tokenizer,
-		batch_size=args.val_batch_size,
-		num_workers=args.num_workers,
-		pin_memory=args.pin_memory,
-		drop_last=False,
-		training=False,
-	)
+    val_loader = _build_dataloader(
+        val_dataset,
+        tokenizer=tokenizer,
+        batch_size=args.val_batch_size,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
+        drop_last=False,
+        training=False,
+    )
 
-	#model.change_vocabulary(new_tokenizer_type=tokenizer, new_tokenizer_dir=args.tokenizer_dir)
+    curriculum_cfg = cfg.get("curriculum", {})
+    curriculum_enabled = bool(curriculum_cfg.get("enabled", False))
 
-	trainer = create_trainer(cfg)
-	exp_dir = train_nemo(
-		model=model,
-		model_cfg=cfg,
-		trainer=trainer,
-		train_dataloader=train_loader,
-		val_dataloader=val_loader,
-	)
+    if curriculum_enabled:
+        curriculum_schedule = curriculum_cfg.get(
+            "schedule",
+            [0.2, 0.5, 0.7, 1.0],
+        )
 
-	return exp_dir
+        score_batch_size = int(
+            curriculum_cfg.get(
+                "score_batch_size",
+                args.val_batch_size,
+            )
+        )
+
+        exp_dir = None
+
+        for stage_idx, active_fraction in enumerate(curriculum_schedule, start=1):
+            print(
+                f"\n========== Curriculum Stage {stage_idx}/{len(curriculum_schedule)} "
+                f"(active_size={active_fraction:.2f}) =========="
+            )
+
+            # Rank the ENTIRE dataset using the CURRENT model.
+            score_loader = _build_dataloader(
+                train_dataset,
+                tokenizer=tokenizer,
+                batch_size=score_batch_size,
+                num_workers=args.num_workers,
+                pin_memory=args.pin_memory,
+                drop_last=False,
+                training=False,
+            )
+
+            ranked = rank_samples_by_wer(
+                model=model,
+                dataloader=score_loader,
+                tokenizer=tokenizer,
+            )
+
+            ordered_indices = [sample.sample_id for sample in ranked]
+
+            active_size = max(
+                1,
+                int(len(ordered_indices) * active_fraction),
+            )
+
+            sampler = CurriculumSampler(
+                ordered_indices,
+                active_size=active_size,
+            )
+
+            train_loader = _build_dataloader(
+                train_dataset,
+                tokenizer=tokenizer,
+                batch_size=args.train_batch_size,
+                num_workers=args.num_workers,
+                pin_memory=args.pin_memory,
+                drop_last=args.drop_last,
+                training=True,
+                sampler=sampler,
+            )
+
+            trainer = create_trainer(cfg)
+
+            exp_dir = train_nemo(
+                model=model,
+                model_cfg=cfg,
+                trainer=trainer,
+                train_dataloader=train_loader,
+                val_dataloader=val_loader,
+            )
+
+    else:
+        train_loader = _build_dataloader(
+            train_dataset,
+            tokenizer=tokenizer,
+            batch_size=args.train_batch_size,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_memory,
+            drop_last=args.drop_last,
+            training=True,
+        )
+
+        trainer = create_trainer(cfg)
+
+        exp_dir = train_nemo(
+            model=model,
+            model_cfg=cfg,
+            trainer=trainer,
+            train_dataloader=train_loader,
+            val_dataloader=val_loader,
+        )
+
+    return exp_dir
 
 
 if __name__ == "__main__":
