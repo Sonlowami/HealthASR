@@ -18,7 +18,8 @@ def rank_samples_by_wer(model, dataloader, tokenizer) -> List[RankedSample]:
     """Rank samples in ascending WER using an already-loaded ASR model."""
     model.eval()
     ranked: List[RankedSample] = []
-    device = model.device
+    device = "cuda"
+    model.to(device)
 
     with torch.no_grad():
         for batch in dataloader:
