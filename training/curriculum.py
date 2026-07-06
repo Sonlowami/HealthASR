@@ -30,15 +30,15 @@ def rank_samples_by_wer(model, dataloader, tokenizer) -> List[RankedSample]:
                 signal = batch[0].to(device, non_blocking=True)
                 signal_len = batch[1]
                 references = batch[2].to(device, non_blocking=True)
-                reference_len = batch[3]
+                reference_len = batch[3].to(device, non_blocking=True)
                 _, encoded_len, greedy_predictions = model.forward(
                     processed_signal=signal, processed_signal_length=signal_len
                 )
             else:
                 signal = batch[0].to(device, non_blocking=True)
-                signal_len = batch[1]
+                signal_len = batch[1].to(device, non_blocking=True)
                 references = batch[2].to(device, non_blocking=True)
-                reference_len = batch[3]
+                reference_len = batch[3].to(device, non_blocking=True)
                 _, encoded_len, greedy_predictions = model.forward(input_signal=signal, input_signal_length=signal_len)
 
             predicted_ids = greedy_predictions
