@@ -162,10 +162,10 @@ def train_nemo(
     nemo_cfg.tokenizer.dir = model_cfg.model.tokenizer.dir
 
     # 3) Tokenizer + datasets
-    model.change_vocabulary(
-        new_tokenizer_dir=nemo_cfg.tokenizer.dir,
-        new_tokenizer_type="bpe",
-    )
+    # model.change_vocabulary(
+    #     new_tokenizer_dir=nemo_cfg.tokenizer.dir,
+    #     new_tokenizer_type="bpe",
+    # )
 
     # 4) Optimizer
     nemo_cfg.optim = OmegaConf.create(model_cfg.model.optim)
