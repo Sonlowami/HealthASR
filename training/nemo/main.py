@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	sys.path.insert(0, str(PROJECT_ROOT))
 	print(f"Added {PROJECT_ROOT} to sys.path")
 from dataset_classes.shared_dataset import SharedASRDataset, load_spt_tokenizer
+from training.curriculum import CurriculumSampler, rank_samples_by_wer
 from training.nemo.trainer import load_config, load_nemo_run_config, create_trainer, train_nemo
 
 
@@ -51,6 +52,7 @@ def _build_dataloader(
 	pin_memory: bool,
 	drop_last: bool,
 	training: bool,
+	sampler=None,
 ) -> DataLoader:
 	collate_fn = lambda batch: SharedASRDataset.nemo_collate_fn(  # noqa: E731
 		batch,
@@ -67,6 +69,7 @@ def _build_dataloader(
 		drop_last=drop_last if training else False,
 		persistent_workers=num_workers > 0,
 		collate_fn=collate_fn,
+		sampler=sampler,
 	)
 
 
@@ -107,6 +110,32 @@ def main() -> str:
 
 	tokenizer = load_spt_tokenizer(args.tokenizer_dir)[0] if args.tokenizer_dir else None
 
+	curriculum_cfg = cfg.get("curriculum", {})
+	curriculum_enabled = bool(curriculum_cfg.get("enabled", False))
+
+	curriculum_sampler = None
+	if curriculum_enabled:
+		model = EncDecCTCModelBPE.from_pretrained(model_name)
+		model.spec_augmentation = None
+
+		score_batch_size = int(curriculum_cfg.get("score_batch_size", args.val_batch_size))
+		score_loader = _build_dataloader(
+			train_dataset,
+			tokenizer=tokenizer,
+			batch_size=score_batch_size,
+			num_workers=args.num_workers,
+			pin_memory=args.pin_memory,
+			drop_last=False,
+			training=False,
+		)
+		ranked = rank_samples_by_wer(model, score_loader, tokenizer)
+		ordered_indices = [item.sample_id for item in ranked]
+		active_size = int(curriculum_cfg.get("active_size", 1.0) * len(ordered_indices))
+		curriculum_sampler = CurriculumSampler(ordered_indices, active_size=active_size)
+	else:
+		model = EncDecCTCModelBPE.from_pretrained(model_name)
+		model.spec_augmentation = None  # Disable NeMo's built-in SpecAugment, since we handle augmentation in the dataset.
+
 	train_loader = _build_dataloader(
 		train_dataset,
 		tokenizer=tokenizer,
@@ -115,6 +144,7 @@ def main() -> str:
 		pin_memory=args.pin_memory,
 		drop_last=args.drop_last,
 		training=True,
+		sampler=curriculum_sampler,
 	)
 	val_loader = _build_dataloader(
 		val_dataset,
@@ -126,8 +156,6 @@ def main() -> str:
 		training=False,
 	)
 
-	model = EncDecCTCModelBPE.from_pretrained(model_name)
-	model.spec_augmentation = None  # Disable NeMo's built-in SpecAugment, since we handle augmentation in the dataset.
 	#model.change_vocabulary(new_tokenizer_type=tokenizer, new_tokenizer_dir=args.tokenizer_dir)
 
 	trainer = create_trainer(cfg)

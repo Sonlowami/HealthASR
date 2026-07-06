@@ -218,6 +218,7 @@ class SharedASRDataset(Dataset):
             "text": text,
             "feature_path": str(feature_path),
             "num_frames": int(features.shape[0]),
+            "sample_index": idx,
         }
 
     @staticmethod
@@ -353,6 +354,7 @@ class SharedASRDataset(Dataset):
         config = config or {}
         processed_features: List[torch.Tensor] = []
         token_ids_list: List[List[int]] = []
+        sample_indices: List[int] = []
     
         for item in features:
             feat = item["input_features"]
@@ -373,6 +375,7 @@ class SharedASRDataset(Dataset):
                 token_ids_list.append(item["labels"])
             else:
                 token_ids_list.append(tokenizer.text_to_ids(item["text"]))
+            sample_indices.append(item.get("sample_index"))
     
         input_features, feature_lengths = cls._pad_features(processed_features)
         input_features = input_features.transpose(1, 2).contiguous()
@@ -381,13 +384,14 @@ class SharedASRDataset(Dataset):
             pad_id=getattr(tokenizer, "pad_id", 0),
             ignore_index=-100,
         )
-    
-        return DALIOutputs({
+        outputs = DALIOutputs({
             "processed_signal": input_features,
             "processed_signal_len": feature_lengths,
             "transcript": labels,
             "transcript_len": label_lengths,
         })
+        outputs.sample_indices = sample_indices
+        return outputs
 
     @staticmethod
     def _apply_aug_static(feat: torch.Tensor, training: bool, config: Optional[Dict[str, Any]]) -> torch.Tensor:

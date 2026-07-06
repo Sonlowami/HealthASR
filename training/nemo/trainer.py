@@ -73,7 +73,7 @@ def load_nemo_run_config(config: DictConfig) -> DictConfig:
     mapped = {
         "model": {
             "tokenizer": {"dir": OmegaConf.select(config, "tokenizer_dir")},
-            "optim": OmegaConf.select(config, "optimizer"),
+            "optim": OmegaConf.select(config, "optimizer")
         },
         # Optional passthrough blocks used in your notebook flow
         "trainer": OmegaConf.select(config, "trainer") or {},
@@ -127,7 +127,10 @@ def _transfer_dali_outputs_to_device(batch: DALIOutputs, device: torch.device) -
             "transcript": batch[2].to(device, non_blocking=True),
             "transcript_len": batch[3].to(device, non_blocking=True),
         }
-    return DALIOutputs(payload)
+    transferred = DALIOutputs(payload)
+    if hasattr(batch, "sample_indices"):
+        transferred.sample_indices = batch.sample_indices
+    return transferred
 
 
 def train_nemo(
