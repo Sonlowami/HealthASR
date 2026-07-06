@@ -15,25 +15,40 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 
 from src.cleaning import run_clean
 from src.features import run_augment, run_extract
 from src.preprocessing import run_preprocess
 
-STEPS = [
-    ("clean", run_clean),
-    ("preprocess", run_preprocess),
-    ("extract", run_extract),
-    ("augment", run_augment),
-]
-
 
 def main() -> int:
     """Run each step sequentially; stop if any step returns non-zero."""
     parser = argparse.ArgumentParser(description="Run the full ASR data pipeline")
     parser.add_argument("--language", help="Process one language only (e.g. kidawida)")
+    parser.add_argument(
+        "--dataset_root",
+        type=Path,
+        default=None,
+        help="Root directory containing per-language raw data folders. "
+             "Only affects the 'clean' step (overrides the default raw-data root).",
+    )
+    parser.add_argument(
+        "--output_root",
+        type=Path,
+        default=None,
+        help="Root directory to write cleaned manifests/report to. "
+             "Only affects the 'clean' step (overrides config.CLEANED_ROOT/STATS_DIR).",
+    )
     args = parser.parse_args()
+
+    STEPS = [
+    ("clean", lambda lang: run_clean(lang, args.dataset_root, args.output_root)),
+    ("preprocess", run_preprocess),
+    ("extract", run_extract),
+    ("augment", run_augment),
+]
 
     for name, fn in STEPS:
         print(f"\n{'=' * 60}\n{name.upper()}\n{'=' * 60}")

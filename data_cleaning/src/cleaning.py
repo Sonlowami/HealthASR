@@ -6,12 +6,15 @@ Verification runs automatically inside run_clean before any filtering.
 Run:
     python -m src.cleaning
     python -m src.cleaning --language kidawida
+    python -m src.cleaning --dataset_root /data/my_corpus
+    python -m src.cleaning --dataset_root /data/my_corpus --output_root /data/my_corpus_cleaned
 """
 from __future__ import annotations
 
 import argparse
 import json
 import sys
+from pathlib import Path
 
 import pandas as pd
 from tqdm import tqdm
@@ -19,6 +22,28 @@ from tqdm import tqdm
 from .config import CLEANED_ROOT, MIN_DURATION_SEC, SPLITS, STATS_DIR
 from .data_loader import load_split
 from .utils import audio_duration, clips_dir, iter_languages, resolve_audio
+
+
+def _iter_language_dirs(language: str | None, dataset_root: Path | None):
+    """
+    Yield (name, meta) pairs, same contract as utils.iter_languages.
+
+    If dataset_root is given, scan it directly instead of the default
+    root baked into utils.iter_languages/config. Only meta["dir"] is
+    populated since that's all downstream code (verify_language, run_clean)
+    actually reads.
+    """
+    if dataset_root is None:
+        yield from iter_languages(language)
+        return
+
+    if language:
+        yield language, {"dir": dataset_root / language}
+        return
+
+    for d in sorted(dataset_root.iterdir()):
+        if d.is_dir():
+            yield d.name, {"dir": d}
 
 
 def verify_language(name: str, lang_dir) -> dict:
@@ -68,7 +93,11 @@ def verify_language(name: str, lang_dir) -> dict:
     return report
 
 
-def run_clean(language: str | None = None) -> int:
+def run_clean(
+    language: str | None = None,
+    dataset_root: Path | None = None,
+    output_root: Path | None = None,
+) -> int:
     """
     Verify then clean all languages and splits (train, dev, test).
 
@@ -79,12 +108,18 @@ def run_clean(language: str | None = None) -> int:
         - duration < MIN_DURATION_SEC
 
     Calls verify_language first — aborts if check fails.
-    Saves data/cleaned/<lang>/manifests/*.tsv and cleaning_report.json
-    (includes verify results under the "verify" key).
+    Saves <output_root or CLEANED_ROOT>/<lang>/manifests/*.tsv and
+    cleaning_report.json (includes verify results under the "verify" key).
+
+    dataset_root: if given, read raw data from here instead of the default
+        root configured in utils.iter_languages/config.
+    output_root: if given, write cleaned manifests here instead of
+        config.CLEANED_ROOT.
     """
     all_stats = []
+    cleaned_root = output_root if output_root is not None else CLEANED_ROOT
 
-    for name, meta in iter_languages(language):
+    for name, meta in _iter_language_dirs(language, dataset_root):
         if not meta["dir"].is_dir():
             print(f"Skip {name}: not found")
             continue
@@ -100,7 +135,7 @@ def run_clean(language: str | None = None) -> int:
             return 1
 
         print(f"Cleaning {name}...")
-        out_dir = CLEANED_ROOT / name / "manifests"
+        out_dir = cleaned_root / name / "manifests"
         out_dir.mkdir(parents=True, exist_ok=True)
         lang_stats = {"language": name, "verify": report, "splits": {}}
         lang_dir = meta["dir"]
@@ -147,8 +182,9 @@ def run_clean(language: str | None = None) -> int:
         print("No languages processed.")
         return 1
 
-    STATS_DIR.mkdir(parents=True, exist_ok=True)
-    path = STATS_DIR / "cleaning_report.json"
+    stats_dir = output_root / "stats" if output_root is not None else STATS_DIR
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    path = stats_dir / "cleaning_report.json"
     path.write_text(json.dumps(all_stats, indent=2))
     print(f"\nSaved {path}")
     return 0
@@ -157,4 +193,19 @@ def run_clean(language: str | None = None) -> int:
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Verify and clean raw ASR data")
     p.add_argument("--language", help="Process one language only")
-    sys.exit(run_clean(p.parse_args().language))
+    p.add_argument(
+        "--dataset_root",
+        type=Path,
+        default=None,
+        help="Root directory containing per-language raw data folders. "
+             "Overrides the default root used by iter_languages.",
+    )
+    p.add_argument(
+        "--output_root",
+        type=Path,
+        default=None,
+        help="Root directory to write cleaned manifests/report to. "
+             "Defaults to config.CLEANED_ROOT / config.STATS_DIR.",
+    )
+    args = p.parse_args()
+    sys.exit(run_clean(args.language, args.dataset_root, args.output_root))
