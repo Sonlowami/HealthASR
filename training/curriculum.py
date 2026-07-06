@@ -56,7 +56,7 @@ def rank_samples_by_wer(model, dataloader, tokenizer) -> List[RankedSample]:
             for row_idx, sample_id in enumerate(sample_ids):
                 ref_ids = references[row_idx][: int(reference_len[row_idx].item())].tolist()
                 hyp_ids = predicted_ids[row_idx][: int(encoded_len[row_idx].item())].tolist()
-                hyp_ids = ctc_collapse(hyp_ids, tokenizer.pad_token_id)
+                hyp_ids = ctc_collapse(hyp_ids, blank_id=tokenizer.vocab_size)
                 print(greedy_predictions.shape)
                 print(greedy_predictions[0][:50])
                 print("max pred:", greedy_predictions.max().item())
