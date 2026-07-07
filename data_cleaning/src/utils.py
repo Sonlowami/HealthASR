@@ -17,9 +17,7 @@ import subprocess
 import imageio_ffmpeg
 
 
-_DURATION_RE = re.compile(
-    r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)"
-)
+_TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
 
 from .config import LANGUAGES
 
@@ -57,17 +55,30 @@ def audio_duration(path: Path) -> tuple[bool, float | None]:
 
     try:
         result = subprocess.run(
-            [ffmpeg, "-i", str(path)],
+            [
+                ffmpeg,
+                "-v", "info",
+                "-i", str(path),
+                "-f", "null",
+                "-",  # decode to null output
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
 
-        match = _DURATION_RE.search(result.stderr)
-        if match:
-            h, m, s = match.groups()
+        # Find the last reported decoded timestamp.
+        matches = _TIME_RE.findall(result.stderr)
+        if matches:
+            h, m, s = matches[-1]
             duration = int(h) * 3600 + int(m) * 60 + float(s)
             return True, duration
+
+        # FFmpeg successfully decoded but didn't emit a time=
+        if result.returncode == 0:
+            return True, None
+
+        print(result.stderr)
 
     except Exception as e:
         print(f"Error reading audio file: {path}")
