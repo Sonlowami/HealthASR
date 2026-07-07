@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mutagen import File as MutagenFile
+import librosa
 
 from .config import LANGUAGES
 
@@ -36,22 +36,13 @@ def resolve_audio(lang_dir: Path, audio_dir: Path, path_val: str) -> Path:
     # Return expected path even if missing (caller checks .is_file())
     return audio_dir / p.name
 
-
 def audio_duration(path: Path) -> tuple[bool, float | None]:
     """
     Check if audio is readable and return its length in seconds.
     Returns (False, None) for corrupt or unsupported files.
     """
     try:
-        audio = MutagenFile(path)
-        if audio is None or audio.info is None:
-            return False, None
-
-        duration = getattr(audio.info, "length", None)
-        if duration is None:
-            return False, None
-
-        return True, float(duration)
+        return True, librosa.get_duration(path=path)
     except Exception:
         return False, None
 
