@@ -10,6 +10,17 @@ from pathlib import Path
 import librosa
 import torchaudio
 
+from pathlib import Path
+import re
+import subprocess
+
+import imageio_ffmpeg
+
+
+_DURATION_RE = re.compile(
+    r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)"
+)
+
 from .config import LANGUAGES
 
 
@@ -42,17 +53,26 @@ def audio_duration(path: Path) -> tuple[bool, float | None]:
     Check if audio is readable and return its length in seconds.
     Returns (False, None) for corrupt or unsupported files.
     """
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
     try:
-        info = torchaudio.info(str(path))
-        return True, info.num_frames / info.sample_rate
+        result = subprocess.run(
+            [ffmpeg, "-i", str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        match = _DURATION_RE.search(result.stderr)
+        if match:
+            h, m, s = match.groups()
+            duration = int(h) * 3600 + int(m) * 60 + float(s)
+            return True, duration
+
     except Exception:
         pass
 
-    try:
-        return True, librosa.get_duration(path=path)
-    except Exception:
-        return False, None
-
+    return False, None
 
 def iter_languages(only: str | None = None):
     """
