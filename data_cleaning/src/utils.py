@@ -69,8 +69,9 @@ def audio_duration(path: Path) -> tuple[bool, float | None]:
             duration = int(h) * 3600 + int(m) * 60 + float(s)
             return True, duration
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error reading audio file: {path}")
+        print(f"Exception: {e}")
 
     return False, None
 
