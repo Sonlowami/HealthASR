@@ -160,7 +160,6 @@ def run_clean(
                 ok, dur = audio_duration(apath)
                 if not ok or dur is None:
                     stats["corrupt_audio"] += 1
-                    print(dur)
                     continue
 
                 if dur < MIN_DURATION_SEC:

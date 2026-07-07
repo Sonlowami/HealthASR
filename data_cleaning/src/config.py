@@ -22,7 +22,7 @@ FEATURES_DIR = PROJECT_ROOT / "outputs" / "features"    # log-mel .npy files
 # Register each language: name → raw folder with train/dev/test manifests + audio
 LANGUAGES = {
     "kidawida": {"code": "dav", "dir": RAW_ROOT / "kidawida"},
-    # "kinyarwanda": {"code": "rw", "dir": RAW_ROOT / "kinyarwanda"},
+    "kinyarwanda": {"code": "rw", "dir": RAW_ROOT / "kinyarwanda"},
     # "swahili": {"code": "sw", "dir": RAW_ROOT / "swahili"},
 }
 

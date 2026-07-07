@@ -47,10 +47,20 @@ def load_split(lang_dir: Path, split: str) -> tuple[pd.DataFrame, str]:
         elif ext == "jsonl":
             df = pd.read_json(path, lines=True)  # one JSON object per line
         else:
-            raw = json.loads(path.read_text()).T
-            # Support both [{...}, ...] and {"data": [...]} formats
-            df = pd.DataFrame(raw if isinstance(raw, list) else raw.get("data", raw))
-
+            raw = json.loads(path.read_text())
+            if isinstance(raw, list):
+                # [{...}, {...}, ...]
+                df = pd.DataFrame(raw)
+            elif isinstance(raw, dict) and isinstance(raw.get("data"), list):
+                # {"data": [{...}, {...}]}
+                df = pd.DataFrame(raw["data"])
+            elif isinstance(raw, dict):
+                # {clip_id: {"path": ..., "sentence": ...}, ...}
+                df = pd.DataFrame.from_dict(raw, orient="index").reset_index().rename(
+            columns={"index": "clip_id"}
+        )
+            else:
+                raise ValueError(f"Unrecognized JSON manifest shape in {path}")
         # --- Map varying column names to standard sentence + path ---
         text_col = _pick_column(df, TEXT_FIELDS)
         audio_col = _pick_column(df, AUDIO_FIELDS)
@@ -63,4 +73,3 @@ def load_split(lang_dir: Path, split: str) -> tuple[pd.DataFrame, str]:
         return out, ext
 
     raise FileNotFoundError(f"No {split}.tsv/.json/.jsonl in {lang_dir}")
-

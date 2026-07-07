@@ -44,24 +44,27 @@ def _mask(mel: np.ndarray, axis: int, max_w: int, n: int = 2) -> np.ndarray:
     return out
 
 
-def run_extract(language: str | None = None) -> int:
+def run_extract(language: str | None = None, source_dir: str | None = None, output_dir: str | None = None) -> int:
     """
     Extract log-mel features for all languages and splits (train, dev, test).
 
     Reads WAV from data/processed/, saves .npy to outputs/features/.
     Also writes a manifest TSV with feature_path and feature_shape per clip.
     """
+    PROCESSED = PROCESSED_ROOT if source_dir is None else Path(source_dir)
+    FEATURES = FEATURES_DIR if output_dir is None else Path(output_dir)
+
     for name, _ in iter_languages(language):
         print(f"\nFeatures {name}...")
 
         for split in SPLITS:
-            manifest = PROCESSED_ROOT / name / "manifests" / f"{split}_processed.tsv"
+            manifest = PROCESSED / name / "manifests" / f"{split}_processed.tsv"
             df = pd.read_csv(manifest, sep="\t")
-            feat_dir = FEATURES_DIR / name / split
+            feat_dir = FEATURES / name / split
             paths, shapes = [], []
 
             for _, row in tqdm(df.iterrows(), total=len(df), desc=f"  {split}"):
-                wav = PROCESSED_ROOT / name / row["audio_path"]
+                wav = PROCESSED / name / row["audio_path"]
                 y, sr = librosa.load(wav, sr=SAMPLE_RATE, mono=True)
 
                 # Mel spectrogram → log scale (shape: 80 mel bins × time frames)
@@ -72,58 +75,73 @@ def run_extract(language: str | None = None) -> int:
                 out.parent.mkdir(parents=True, exist_ok=True)
                 np.save(out, log_mel)
 
-                paths.append(str(out.relative_to(FEATURES_DIR / name)))
+                paths.append(str(out.relative_to(FEATURES / name)))
                 shapes.append(str(list(log_mel.shape)))
 
             df["feature_path"], df["feature_shape"] = paths, shapes
-            df.to_csv(FEATURES_DIR / name / f"{split}_features.tsv", sep="\t", index=False)
+            df.to_csv(FEATURES / name / f"{split}_features.tsv", sep="\t", index=False)
 
     return 0
 
 
-def run_augment(language: str | None = None) -> int:
-    """
-    Augment training features for all languages (fixed seed for reproducibility).
+# def run_augment(language: str | None = None) -> int:
+#     """
+#     Augment training features for all languages (fixed seed for reproducibility).
 
-    Creates one augmented copy of each training spectrogram.
-    Applies time masking then frequency masking (SpecAugment).
-    Only runs on train split — dev/test are never augmented.
-    """
-    np.random.seed(42)
+#     Creates one augmented copy of each training spectrogram.
+#     Applies time masking then frequency masking (SpecAugment).
+#     Only runs on train split — dev/test are never augmented.
+#     """
+#     np.random.seed(42)
 
-    for name, _ in iter_languages(language):
-        print(f"\nAugment {name}...")
+#     for name, _ in iter_languages(language):
+#         print(f"\nAugment {name}...")
 
-        manifest = FEATURES_DIR / name / "train_features.tsv"
-        df = pd.read_csv(manifest, sep="\t")
-        aug_dir = FEATURES_DIR / name / "train_augmented"
-        rows = []
+#         manifest = FEATURES_DIR / name / "train_features.tsv"
+#         df = pd.read_csv(manifest, sep="\t")
+#         aug_dir = FEATURES_DIR / name / "train_augmented"
+#         rows = []
 
-        for _, row in tqdm(df.iterrows(), total=len(df), desc="  augment"):
-            mel = np.load(FEATURES_DIR / name / row["feature_path"])
+#         for _, row in tqdm(df.iterrows(), total=len(df), desc="  augment"):
+#             mel = np.load(FEATURES_DIR / name / row["feature_path"])
 
-            # Time mask (max 40 frames) then frequency mask (max 15 mel bins)
-            aug = _mask(_mask(mel, axis=1, max_w=40), axis=0, max_w=15)
+#             # Time mask (max 40 frames) then frequency mask (max 15 mel bins)
+#             aug = _mask(_mask(mel, axis=1, max_w=40), axis=0, max_w=15)
 
-            stem = Path(row["feature_path"]).stem
-            path = aug_dir / f"{stem}_aug0.npy"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            np.save(path, aug)
+#             stem = Path(row["feature_path"]).stem
+#             path = aug_dir / f"{stem}_aug0.npy"
+#             path.parent.mkdir(parents=True, exist_ok=True)
+#             np.save(path, aug)
 
-            r = row.to_dict()
-            r["feature_path"] = str(path.relative_to(FEATURES_DIR / name))
-            r["feature_shape"] = str(list(aug.shape))
-            rows.append(r)
+#             r = row.to_dict()
+#             r["feature_path"] = str(path.relative_to(FEATURES_DIR / name))
+#             r["feature_shape"] = str(list(aug.shape))
+#             rows.append(r)
 
-        pd.DataFrame(rows).to_csv(FEATURES_DIR / name / "train_augmented.tsv", sep="\t", index=False)
+#         pd.DataFrame(rows).to_csv(FEATURES_DIR / name / "train_augmented.tsv", sep="\t", index=False)
 
-    return 0
+#     return 0
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Extract or augment log-mel features")
-    p.add_argument("action", choices=["extract", "augment"])
+    p.add_argument("--action", default="extract", choices=["extract", "augment"])
     p.add_argument("--language", help="Process one language only")
+    p.add_argument(
+        "--source_dir",
+        type=Path,
+        default=None,
+        help="Root directory containing per-language processed data folders. "
+             "Only affects the 'extract' step (overrides the default processed-data root).",
+    )
+    p.add_argument(
+        "--output_dir",
+        type=Path,
+        default=None,
+        help="Root directory to write features to. "
+             "Only affects the 'extract' step (overrides the default features root).",
+    )
+
     args = p.parse_args()
-    fn = run_extract if args.action == "extract" else run_augment
-    sys.exit(fn(args.language))
+    fn = run_extract #if args.action == "extract" else run_augment
+    sys.exit(fn(args.language, args.source_dir, args.output_dir))

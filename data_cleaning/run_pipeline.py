@@ -19,7 +19,7 @@ from pathlib import Path
 import sys
 
 from src.cleaning import run_clean
-from src.features import run_augment, run_extract
+from src.features import run_extract
 from src.preprocessing import run_preprocess
 
 
@@ -35,19 +35,35 @@ def main() -> int:
              "Only affects the 'clean' step (overrides the default raw-data root).",
     )
     parser.add_argument(
-        "--output_root",
+        "--cleaned_dir",
         type=Path,
         default=None,
         help="Root directory to write cleaned manifests/report to. "
              "Only affects the 'clean' step (overrides config.CLEANED_ROOT/STATS_DIR).",
     )
+    parser.add_argument(
+        "--processed_dir",
+        type=Path,
+        default=None,
+        help="Root directory to write processed audio and manifests to. "
+                "Only affects the 'preprocess' step (overrides config.PROCESSED_ROOT)."
+    )
+
+    parser.add_argument(
+        "--features_dir",
+        type=Path,
+        default=None,
+        help="Root directory to write features to. "
+                "Only affects the 'extract' and 'augment' steps (overrides config.FEATURES_DIR)."
+        )
+
     args = parser.parse_args()
 
     STEPS = [
-    ("clean", lambda lang: run_clean(lang, args.dataset_root, args.output_root)),
-    ("preprocess", run_preprocess),
-    ("extract", run_extract),
-    ("augment", run_augment),
+    ("clean", lambda lang: run_clean(lang, args.dataset_root, args.cleaned_dir)),
+    ("preprocess", lambda lang: run_preprocess(lang, args.dataset_root, args.processed_dir, args.cleaned_dir)),
+    ("extract", lambda lang: run_extract(lang, args.processed_dir, args.features_dir)),
+    #("augment", run_augment),
 ]
 
     for name, fn in STEPS:
