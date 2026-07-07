@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import librosa
+import torchaudio
 
 from .config import LANGUAGES
 
@@ -41,6 +42,12 @@ def audio_duration(path: Path) -> tuple[bool, float | None]:
     Check if audio is readable and return its length in seconds.
     Returns (False, None) for corrupt or unsupported files.
     """
+    try:
+        info = torchaudio.info(str(path))
+        return True, info.num_frames / info.sample_rate
+    except Exception:
+        pass
+
     try:
         return True, librosa.get_duration(path=path)
     except Exception:
