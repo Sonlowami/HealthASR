@@ -132,65 +132,52 @@ def _transfer_dali_outputs_to_device(batch: DALIOutputs, device: torch.device) -
         transferred.sample_indices = batch.sample_indices
     return transferred
 
-
 def train_nemo(
     model,
     model_cfg: DictConfig,
     trainer: pl.Trainer,
     train_dataloader=None,
     val_dataloader=None,
+    perform_setup: bool = True,
 ) -> str:
     """
     Configure and train a NeMo ASR model (EncDecCTCModelBPE-style), based on notebook flow.
-
-    Steps:
-      1) exp_manager(trainer, cfg.exp_manager)
-      2) connect config paths/sizes to model cfg
-      3) change vocabulary + setup training/validation data
-      4) setup optimization
-      5) trainer.fit(model)
-
-    Returns:
-      exp_dir path from exp_manager
     """
-    # 1) Experiment manager
-    exp_manager_cfg = model_cfg.get("exp_manager", {})
-    exp_dir = exp_manager(trainer, exp_manager_cfg)
+    exp_dir = None
 
-    # 2) Update model config
-    nemo_cfg = model.cfg
-    nemo_cfg.tokenizer.dir = model_cfg.model.tokenizer.dir
+    if perform_setup:
+        # 1) Experiment manager
+        exp_manager_cfg = model_cfg.get("exp_manager", {})
+        exp_dir = exp_manager(trainer, exp_manager_cfg)
 
-    # 3) Tokenizer + datasets
-    # model.change_vocabulary(
-    #     new_tokenizer_dir=nemo_cfg.tokenizer.dir,
-    #     new_tokenizer_type="bpe",
-    # )
+        # 2) Update model config
+        nemo_cfg = model.cfg
+        nemo_cfg.tokenizer.dir = model_cfg.model.tokenizer.dir
 
-    # 4) Optimizer
-    nemo_cfg.optim = OmegaConf.create(model_cfg.model.optim)
-    model.setup_optimization(optim_config=nemo_cfg.optim)
+        # 4) Optimizer
+        nemo_cfg.optim = OmegaConf.create(model_cfg.model.optim)
+        model.setup_optimization(optim_config=nemo_cfg.optim)
 
-    def _transfer_batch_to_device(self, batch, device, dataloader_idx: int = 0):
-        if isinstance(batch, DALIOutputs):
-            self._healthasr_last_batch_size = int(batch._outs[0].shape[0])
-            return _transfer_dali_outputs_to_device(batch, device)
-        return batch
+        def _transfer_batch_to_device(self, batch, device, dataloader_idx: int = 0):
+            if isinstance(batch, DALIOutputs):
+                self._healthasr_last_batch_size = int(batch._outs[0].shape[0])
+                return _transfer_dali_outputs_to_device(batch, device)
+            return batch
 
-    type(model).transfer_batch_to_device = _transfer_batch_to_device
+        type(model).transfer_batch_to_device = _transfer_batch_to_device
 
-    original_log = model.log
+        original_log = model.log
 
-    def _log_with_default_batch_size(*args, **kwargs):
-        if args and args[0] == "global_step" and "batch_size" not in kwargs:
-            kwargs["batch_size"] = getattr(model, "_healthasr_last_batch_size", 1)
-        return original_log(*args, **kwargs)
+        def _log_with_default_batch_size(*args, **kwargs):
+            if args and args[0] == "global_step" and "batch_size" not in kwargs:
+                kwargs["batch_size"] = getattr(model, "_healthasr_last_batch_size", 1)
+            return original_log(*args, **kwargs)
 
-    model.log = _log_with_default_batch_size
+        model.log = _log_with_default_batch_size
 
     # 5) Train
-    # NOTE: for NeMo ASR models, trainer.fit(model) is usually enough after setup_* calls.
-    # If explicit dataloaders are passed, Lightning accepts them, but NeMo already wires loaders internally.
+    # Supplying train_dataloaders explicitly here tells Lightning to swap out 
+    # the old dataloader and seamlessly resume the loop with the new one.
     if train_dataloader is not None or val_dataloader is not None:
         trainer.fit(model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
     else:
