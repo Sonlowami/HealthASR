@@ -6,9 +6,8 @@ Handles finding audio files on disk and checking clip duration.
 from __future__ import annotations
 
 from pathlib import Path
-
-import librosa
-import torchaudio
+import av
+import numpy as np
 
 from pathlib import Path
 import re
@@ -96,3 +95,30 @@ def iter_languages(only: str | None = None):
         if only and name != only:
             continue
         yield name, meta
+
+
+def _load_audio_av(path: Path, sr: int) -> np.ndarray:
+    """
+    Decode audio via PyAV (binds ffmpeg's libavformat/libavcodec in-process,
+    no subprocess) directly to mono float32 at the target sample rate.
+    Handles containers soundfile can't read, e.g. .webm.
+    """
+    container = av.open(str(path))
+    stream = next((s for s in container.streams if s.type == "audio"), None)
+    if stream is None:
+        container.close()
+        raise ValueError(f"No audio stream in {path}")
+
+    resampler = av.AudioResampler(format="fltp", layout="mono", rate=sr)
+
+    chunks = []
+    for frame in container.decode(stream):
+        for resampled in resampler.resample(frame):
+            chunks.append(resampled.to_ndarray().reshape(-1))
+    for resampled in resampler.resample(None):  # flush remaining samples
+        chunks.append(resampled.to_ndarray().reshape(-1))
+
+    container.close()
+    if not chunks:
+        raise ValueError(f"No audio decoded from {path}")
+    return np.concatenate(chunks).astype(np.float32)

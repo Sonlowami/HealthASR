@@ -21,7 +21,7 @@ import soundfile as sf
 from tqdm import tqdm
 
 from .config import CLEANED_ROOT, PROCESSED_ROOT, SAMPLE_RATE, SPLITS
-from .utils import clips_dir, iter_languages, resolve_audio
+from .utils import clips_dir, iter_languages, resolve_audio, _load_audio_av
 
 
 def run_preprocess(
@@ -60,8 +60,10 @@ def run_preprocess(
                 src = resolve_audio(lang_dir, adir, row["path"])
                 dst = out_audio / Path(row["path"]).with_suffix(".wav").name
                 dst.parent.mkdir(parents=True, exist_ok=True)
-
-                y, _ = librosa.load(src, sr=SAMPLE_RATE, mono=True)
+                try:
+                    y, _ = librosa.load(src, sr=SAMPLE_RATE, mono=True)
+                except Exception:
+                    y = _load_audio_av(src, SAMPLE_RATE)
                 sf.write(dst, y, SAMPLE_RATE)
 
                 r = row.to_dict()
@@ -83,8 +85,8 @@ if __name__ == "__main__":
         "--source_dir",
         type=str,
         default=None,
-        help="Root directory containing per-language cleaned data folders. "
-             "Only affects the 'preprocess' step (overrides the default cleaned-data root).",
+        help="Root directory containing the audio dataset. "
+             "Only affects the 'preprocess' step (overrides the default CONFIG.RAW_ROOT).",
     )
     p.add_argument(
         "--output_dir",
