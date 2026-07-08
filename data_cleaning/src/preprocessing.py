@@ -32,10 +32,7 @@ def _process_one(args):
     dst = out_audio / Path(row["path"]).with_suffix(".wav").name
     dst.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        y, _ = librosa.load(src, sr=sample_rate, mono=True)
-    except Exception:
-        y = _load_audio_av(src, sample_rate)
+    y = _load_audio_av(src, sample_rate)
     sf.write(dst, y, sample_rate)
 
     row["transcript"] = re.sub(r"\s+", " ", str(row["sentence"]).lower().strip())
