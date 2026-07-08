@@ -13,16 +13,34 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import os
 from pathlib import Path
 
 import librosa
 import pandas as pd
 import soundfile as sf
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from .config import CLEANED_ROOT, PROCESSED_ROOT, SAMPLE_RATE, SPLITS
 from .utils import clips_dir, iter_languages, resolve_audio, _load_audio_av
 
+def _process_one(args):
+    lang_dir, adir, out_audio, processed_root, lang_name, row_dict, sample_rate = args
+    row = row_dict
+    src = resolve_audio(lang_dir, adir, row["path"])
+    dst = out_audio / Path(row["path"]).with_suffix(".wav").name
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        y, _ = librosa.load(src, sr=sample_rate, mono=True)
+    except Exception:
+        y = _load_audio_av(src, sample_rate)
+    sf.write(dst, y, sample_rate)
+
+    row["transcript"] = re.sub(r"\s+", " ", str(row["sentence"]).lower().strip())
+    row["audio_path"] = str(dst.relative_to(processed_root / lang_name))
+    return row
 
 def run_preprocess(
         language: str | None = None,
@@ -44,6 +62,8 @@ def run_preprocess(
         lang_dir = meta["dir"] if source_dir is None else Path(source_dir) / name
         PROCESSED = PROCESSED_ROOT if output_dir is None else Path(output_dir)
         CLEANED = CLEANED_ROOT if cleaned_dir is None else Path(cleaned_dir)
+        num_workers = os.cpu_count() or 1
+        print(f"Using {num_workers} cpus for audio processing.")
 
         for split in SPLITS:
             manifest = CLEANED / name / "manifests" / f"{split}.tsv"
@@ -56,23 +76,14 @@ def run_preprocess(
             out_audio.mkdir(parents=True, exist_ok=True)
             rows = []
 
-            for _, row in tqdm(df.iterrows(), total=len(df), desc=f"  {split}"):
-                src = resolve_audio(lang_dir, adir, row["path"])
-                dst = out_audio / Path(row["path"]).with_suffix(".wav").name
-                dst.parent.mkdir(parents=True, exist_ok=True)
-
-                try:
-                    y = _load_audio_av(src, SAMPLE_RATE)
-                except Exception as e:
-                    print(f"Error reading {src}: {e}")
-                    continue
-                sf.write(dst, y, SAMPLE_RATE)
-
-                r = row.to_dict()
-                r["transcript"] = re.sub(r"\s+", " ", str(row["sentence"]).lower().strip())
-                r["audio_path"] = str(dst.relative_to(PROCESSED / name))
-                rows.append(r)
-
+            tasks = [
+                (lang_dir, adir, out_audio, PROCESSED, name, row.to_dict(), SAMPLE_RATE)
+                for _, row in df.iterrows()
+            ]
+            with ProcessPoolExecutor(max_workers=num_workers) as pool:
+                futures = [pool.submit(_process_one, t) for t in tasks]
+                for f in tqdm(as_completed(futures), total=len(futures), desc=f"  {split}"):
+                    rows.append(f.result())
             out = PROCESSED / name / "manifests" / f"{split}_processed.tsv"
             out.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(rows).to_csv(out, sep="\t", index=False)
