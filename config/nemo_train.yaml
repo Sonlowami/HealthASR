@@ -1,0 +1,61 @@
+# Parakeet Kinyarwanda fine-tuning config
+# Based on: model_Parakeet/experment.ipynb by Azza Osman
+
+env:
+  NEMO_CACHE_DIR: "/A_track"
+
+model:
+  init_from_pretrained_model: "nvidia/parakeet-ctc-1.1b"
+  #model_config_path: "examples/asr/conf/conformer/conformer_ctc_bpe.yaml"
+
+  tokenizer:
+    dir: "/home/sonlowami/carnegie-mellon/internship/HealthASR/tokenizers/kidawida/tokenizer_spe_bpe_v1024"
+    type: "bpe"
+
+  optim:
+    name: "adamw"
+    lr: 0.0001
+    betas: [0.9, 0.98]
+    weight_decay: 0.001
+    sched:
+      name: "CosineAnnealing"
+      warmup_steps: 2000
+
+trainer:
+  accelerator: "gpu"    # change to "cpu" if needed
+  devices: 1
+  max_epochs: 50   # used as-is if curriculum is disabled, or as a fallback
+                    # for any curriculum stage that doesn't override it via
+                    # curriculum.epochs_per_stage below.
+  precision: "bf16"
+
+exp_manager:
+  exp_dir: "results/nemo_experiments"
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    name: "parakeet-kinyarwanda-two-phase-finetune"
+    project: "nemo-asr"
+
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    monitor: "val_wer"
+    mode: "min"
+    save_top_k: 5
+    filename: "{epoch}-{step}-{val_wer:.2f}"
+    verbose: true
+
+# Top-level, not nested under exp_manager — the pipeline reads
+# cfg.curriculum, so it must live here to actually take effect.
+curriculum:
+  enabled: true
+  # Fraction of the (re-ranked) training set used in each stage.
+  schedule: [0.2, 0.5, 1.0]
+  # Epoch budget for the matching stage above (same length as schedule).
+  # Stage 1: 10 epochs on the easiest 20% of data.
+  # Stage 2: 10 epochs on the next 30% of data.
+  # Stage 3: 30 epochs on the full dataset.
+  # Total = 50 epochs, matching the original single-run intent.
+  epochs_per_stage: [10, 10, 30]
+  # Batch size used when re-scoring the full training set at the start
+  # of each stage. Defaults to val_batch_size if omitted.
+  score_batch_size: 8
