@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+import os
 from pathlib import Path
 
 import librosa
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from .config import FEATURES_DIR, HOP_LENGTH, N_FFT, N_MELS, PROCESSED_ROOT, SAMPLE_RATE, SPLITS
 from .utils import iter_languages
 
@@ -43,6 +44,23 @@ def _mask(mel: np.ndarray, axis: int, max_w: int, n: int = 2) -> np.ndarray:
         out[tuple(sl)] = out.mean()
     return out
 
+def _extract_one(args):
+    idx, processed_root, features_root, lang_name, row_dict, sample_rate, n_fft, hop_length, n_mels = args
+    row = row_dict
+    wav = processed_root / lang_name / row["audio_path"]
+    y, sr = librosa.load(wav, sr=sample_rate, mono=True)
+
+    mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels)
+    log_mel = librosa.power_to_db(mel, ref=np.max)
+
+    out = features_root / lang_name / row["split"] / f"{Path(row['audio_path']).stem}.npy"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    np.save(out, log_mel)
+
+    path = str(out.relative_to(features_root / lang_name))
+    shape = str(list(log_mel.shape))
+    return idx, path, shape
+
 
 def run_extract(language: str | None = None, source_dir: str | None = None, output_dir: str | None = None) -> int:
     """
@@ -53,6 +71,7 @@ def run_extract(language: str | None = None, source_dir: str | None = None, outp
     """
     PROCESSED = PROCESSED_ROOT if source_dir is None else Path(source_dir)
     FEATURES = FEATURES_DIR if output_dir is None else Path(output_dir)
+    num_workers = os.cpu_count() or 1
 
     for name, _ in iter_languages(language):
         print(f"\nFeatures {name}...")
@@ -61,24 +80,23 @@ def run_extract(language: str | None = None, source_dir: str | None = None, outp
             manifest = PROCESSED / name / "manifests" / f"{split}_processed.tsv"
             df = pd.read_csv(manifest, sep="\t")
             feat_dir = FEATURES / name / split
-            paths, shapes = [], []
+            feat_dir.mkdir(parents=True, exist_ok=True)
 
-            for _, row in tqdm(df.iterrows(), total=len(df), desc=f"  {split}"):
-                wav = PROCESSED / name / row["audio_path"]
-                y, sr = librosa.load(wav, sr=SAMPLE_RATE, mono=True)
+            tasks = []
+            for i, (_, row) in enumerate(df.iterrows()):
+                row_dict = row.to_dict()
+                row_dict["split"] = split
+                tasks.append((i, PROCESSED, FEATURES, name, row_dict, SAMPLE_RATE, N_FFT, HOP_LENGTH, N_MELS))
 
-                # Mel spectrogram → log scale (shape: 80 mel bins × time frames)
-                mel = librosa.feature.melspectrogram(y=y, sr=sr, n_fft=N_FFT, hop_length=HOP_LENGTH, n_mels=N_MELS)
-                log_mel = librosa.power_to_db(mel, ref=np.max)
+            results = [None] * len(tasks)
+            with ProcessPoolExecutor(max_workers=num_workers) as pool:
+                futures = [pool.submit(_extract_one, t) for t in tasks]
+                for f in tqdm(as_completed(futures), total=len(futures), desc=f"  {split}"):
+                    idx, path, shape = f.result()
+                    results[idx] = (path, shape)
 
-                out = feat_dir / f"{Path(row['audio_path']).stem}.npy"
-                out.parent.mkdir(parents=True, exist_ok=True)
-                np.save(out, log_mel)
-
-                paths.append(str(out.relative_to(FEATURES / name)))
-                shapes.append(str(list(log_mel.shape)))
-
-            df["feature_path"], df["feature_shape"] = paths, shapes
+            paths, shapes = zip(*results) if results else ([], [])
+            df["feature_path"], df["feature_shape"] = list(paths), list(shapes)
             df.to_csv(FEATURES / name / f"{split}_features.tsv", sep="\t", index=False)
 
     return 0
