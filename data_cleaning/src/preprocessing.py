@@ -60,10 +60,12 @@ def run_preprocess(
                 src = resolve_audio(lang_dir, adir, row["path"])
                 dst = out_audio / Path(row["path"]).with_suffix(".wav").name
                 dst.parent.mkdir(parents=True, exist_ok=True)
+
                 try:
-                    y, _ = librosa.load(src, sr=SAMPLE_RATE, mono=True)
-                except Exception:
                     y = _load_audio_av(src, SAMPLE_RATE)
+                except Exception as e:
+                    print(f"Error reading {src}: {e}")
+                    continue
                 sf.write(dst, y, SAMPLE_RATE)
 
                 r = row.to_dict()
