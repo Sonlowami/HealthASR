@@ -148,7 +148,7 @@ def run_clean(
 
             for _, row in tqdm(df.iterrows(), total=len(df), desc=f"  {split}"):
                 text = row["sentence"].strip() if pd.notna(row["sentence"]) else ""
-                if not text:
+                if not text and split != "test":
                     stats["empty_transcript"] += 1
                     continue
 
@@ -162,7 +162,7 @@ def run_clean(
                     stats["corrupt_audio"] += 1
                     continue
 
-                if dur < MIN_DURATION_SEC:
+                if dur < MIN_DURATION_SEC and split != "test":
                     stats["too_short"] += 1
                     continue
 
