@@ -54,6 +54,8 @@ class NemoValidationPipeline(NemoASRPipeline):
         # 1) Setup steps using inherited infrastructure
         self.load_config()
         self.load_tokenizer()
+        sample_predicted = []
+        sample_references = []
         
         # Build validation dataset exclusively
         augmentation_cfg = self.cfg.get("augmentation", {})
@@ -132,6 +134,9 @@ class NemoValidationPipeline(NemoASRPipeline):
                     hyp_chars = " ".join(hyp_words)
                     total_char_edits += compute_levenshtein_distance(ref, hyp_chars)
                     total_chars_ref += len(ref)
+                    if len(sample_predicted) < 5:  # Sample a few predictions for inspection
+                        sample_predicted.append(hyp_chars)
+                        sample_references.append(ref)
 
         # 5) Calculate final global proportions
         global_wer = (total_word_edits / total_words_ref) if total_words_ref > 0 else 0.0
@@ -142,7 +147,7 @@ class NemoValidationPipeline(NemoASRPipeline):
         print(f"Global Character Error Rate (CER): {global_cer * 100:.2f}%")
         print("====================================================\n")
 
-        return global_wer, global_cer
+        return global_wer, global_cer, sample_predicted, sample_references
 
 
 def main() -> tuple[float, float]:
@@ -155,4 +160,8 @@ def main() -> tuple[float, float]:
 
 
 if __name__ == "__main__":
-    print(main())
+    global_wer, global_cer, sample_predicted, sample_references = main()
+    print("Validation completed successfully.")
+    print("Sample predictions: ", sample_predicted)
+    print("Sample references: ", sample_references)
+    print(f"Final Global WER: {global_wer * 100:.2f}%, CER: {global_cer * 100:.2f}%")
