@@ -301,4 +301,6 @@ def main() -> str:
 
 
 if __name__ == "__main__":
+	import wandb
+	wandb.login(key=os.environ.get("WANDB_API_KEY", None))
 	main()
