@@ -98,7 +98,7 @@ class NemoValidationPipeline(NemoASRPipeline):
 
                 # Forward pass to obtain log probabilities
                 log_probs, encoded_len, _ = self.model(
-                    processed=features, 
+                    processed_signal=features, 
                     processed_signal_length=feature_lengths
                 )
 
