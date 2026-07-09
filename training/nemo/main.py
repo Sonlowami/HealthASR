@@ -151,7 +151,7 @@ class NemoASRPipeline:
 		return DataLoader(
 			dataset,
 			batch_size=batch_size,
-			shuffle=training,
+			shuffle=False,
 			num_workers=self.args.num_workers,
 			pin_memory=self.args.pin_memory,
 			drop_last=drop_last if training else False,
