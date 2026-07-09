@@ -109,8 +109,14 @@ class NemoASRPipeline:
 			)
 		self.authenticate_huggingface()
 		# The only line that depends on which model class is in use.
-		self.model = self.model_class.from_pretrained(model_name)
+		if os.path.exists(model_name):
+			# If the model name is a local path, load from the local checkpoint.
+			self.model = self.model_class.restore_from(model_name)
+		else:
+			# Otherwise, load from a pretrained model name (Hugging Face or NeMo Hub).
+			self.model = self.model_class.from_pretrained(model_name)
 		self.model.spec_augmentation = None
+		print(self.model)
 
 	def build_datasets(self) -> None:
 		augmentation_cfg = self.cfg.get("augmentation", {})
