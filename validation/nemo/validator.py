@@ -98,12 +98,12 @@ class NemoValidationPipeline(NemoASRPipeline):
 
                 # Forward pass to obtain log probabilities
                 log_probs, encoded_len, _ = self.model(
-                    input_signal=features, 
-                    input_signal_length=feature_lengths
+                    processed=features, 
+                    processed_signal_length=feature_lengths
                 )
 
                 # Use NeMo's native CTC decoding helper to extract hypotheses strings
-                hypotheses, _ = self.model.decoding.ctc_decoder_predictions_tensor(
+                hypotheses = self.model.decoding.ctc_decoder_predictions_tensor(
                     log_probs, 
                     encoded_len
                 )
@@ -122,14 +122,15 @@ class NemoValidationPipeline(NemoASRPipeline):
                 # 4) Accumulate global distance metrics
                 for ref, hyp in zip(references, hypotheses):
                     ref_words = ref.split()
-                    hyp_words = hyp.split()
+                    hyp_words = hyp.words
 
                     # Word metrics
                     total_word_edits += compute_levenshtein_distance(ref_words, hyp_words)
                     total_words_ref += len(ref_words)
 
                     # Character metrics
-                    total_char_edits += compute_levenshtein_distance(ref, hyp)
+                    hyp_chars = " ".join(hyp_words)
+                    total_char_edits += compute_levenshtein_distance(ref, hyp_chars)
                     total_chars_ref += len(ref)
 
         # 5) Calculate final global proportions
@@ -154,4 +155,4 @@ def main() -> tuple[float, float]:
 
 
 if __name__ == "__main__":
-    main()
+    print(main())
