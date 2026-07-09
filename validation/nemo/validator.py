@@ -76,6 +76,10 @@ class NemoValidationPipeline(NemoASRPipeline):
         )
         
         self.load_model()
+        self.model.change_vocabulary(
+            new_tokenizer_dir=self.cfg.model.tokenizer.dir,
+            new_tokenizer_type=self.cfg.model.tokenizer.type,
+        )
         
         # 2) Prepare model for inference
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
