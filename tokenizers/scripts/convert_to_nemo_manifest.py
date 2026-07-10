@@ -41,11 +41,11 @@ def convert_to_nemo_manifest(input_path, output_path, audio_base_path):
             audio_path = os.path.join(audio_base_path, audio_file)
 
             transcription = entry['sentence']
-            #duration = entry['duration']
+            duration = entry['duration_sec']
 
             manifest_lines.append({
                 "audio_filepath": audio_path,
-                #"duration": float(duration),
+                "duration": float(duration),
                 "text": str(transcription).strip()
             })
 

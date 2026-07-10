@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+	sys.path.insert(0, str(PROJECT_ROOT))
+	print(f"Added {PROJECT_ROOT} to sys.path")
+
 import utils.model_utils as model_utils
 import argparse
 from nemo.utils.exp_manager import exp_manager
@@ -47,8 +55,10 @@ class AudioNemoTrainer:
     
 
 if __name__ == "__main__":
+
+
     parser = argparse.ArgumentParser(description="Train a NeMo model.")
-    parser.add_argument("--pretrained_model", type=str, required=True, help="Name of the model to load.")
+    parser.add_argument("--pretrained_model", type=str, required=False, default=None, help="Name of the model to load.")
     parser.add_argument("--model_class", type=str, required=True, help="Dotted path to the model class.")
     parser.add_argument("--config", type=str, required=True, help="Path to the configuration file.")
     args = parser.parse_args()
