@@ -261,30 +261,6 @@ class SharedASRDataset(Dataset):
         freq_mask = T.FrequencyMasking(freq_mask_param=freq_mask_param) if use_freq_mask else None
         return time_mask, freq_mask
 
-    def _apply_augmentation(self, feat: torch.Tensor) -> torch.Tensor:
-        if not self.training:
-            return feat
-
-        # torchaudio masking expects [batch_or_channel, freq, time] in common use.
-        # For our canonical [T, 80], transpose to [1, 80, T], mask, then transpose back.
-        aug_cfg = (self.config or {}).get("augmentation", {})
-        num_time_masks = int(aug_cfg.get("num_time_masks", 2))
-        num_freq_masks = int(aug_cfg.get("num_freq_masks", 2))
-
-        time_mask, freq_mask = self._make_aug_transforms()
-
-        x = feat.transpose(0, 1).unsqueeze(0)  # [1, 80, T]
-
-        if freq_mask is not None:
-            for _ in range(num_freq_masks):
-                x = freq_mask(x)
-
-        if time_mask is not None:
-            for _ in range(num_time_masks):
-                x = time_mask(x)
-
-        return x.squeeze(0).transpose(0, 1).contiguous()  # back to [T, 80]
-
     @classmethod
     def hf_collate_fn(
         cls,
