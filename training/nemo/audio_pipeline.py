@@ -35,7 +35,7 @@ class AudioNemoTrainer:
         """
         Train the model using the provided trainer.
         """
-        exp_dir = exp_manager(self.trainer, cfg=self.model.cfg.exp_manager)
+        exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
         self.trainer.fit(self.model)
         return exp_dir
 
