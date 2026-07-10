@@ -66,5 +66,5 @@ if __name__ == "__main__":
 
     cfg = OmegaConf.load(args.config)
     trainer = AudioNemoTrainer(args.pretrained_model, args.model_class, cfg)
-    print(trainer.evaluate())
+    print(trainer.train())
     #print(f"Training completed. Experiment directory: {exp_dir}")
