@@ -19,7 +19,7 @@ def load_data(input_path):
         df = pd.read_csv(input_path, sep=sep)
 
         # Expect columns: path, sentence, sentence_domain
-        required_cols = {"path", "sentence", "sentence_domain"}
+        required_cols = {"path", "sentence",}
         missing = required_cols - set(df.columns)
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
