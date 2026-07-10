@@ -54,7 +54,8 @@ def convert_to_nemo_manifest(input_path, output_path, audio_base_path):
 
     # Write the entire manifest as a single JSON array (JSONL previously)
     with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(manifest_lines, f, ensure_ascii=False, indent=2)
+        for line in manifest_lines:
+            f.write(json.dumps(line, ensure_ascii=False) + '\n')
 
 
 if __name__ == '__main__':
