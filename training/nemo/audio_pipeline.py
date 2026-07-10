@@ -50,7 +50,8 @@ class AudioNemoTrainer:
 
     def evaluate(self):
         self.setup_model()
-        results = self.trainer.validate(model=self.model)
+        val_dataloader = self.model._validation_dl
+        results = self.trainer.validate(dataloaders=val_dataloader)
         return results[0] if results else {}
     
 
