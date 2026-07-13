@@ -82,6 +82,16 @@ def setup_model(model, cfg: DictConfig) -> None:
     model_cfg.tokenizer.type = cfg['model']['tokenizer_type']
     model_cfg.train_ds.manifest_filepath = cfg['model']['train_ds']['manifest_filepath']
     model_cfg.validation_ds.manifest_filepath = cfg['model']['validation_ds']['manifest_filepath']
+
+	# Clear leftover tarred-dataset config inherited from the pretrained
+    # checkpoint (NVIDIA's original training setup used tarred/webdataset
+    # shards on their own internal storage — not applicable here).
+    for ds_key in ("train_ds", "validation_ds"):
+        ds_cfg = model_cfg[ds_key]
+        ds_cfg.is_tarred = False
+        ds_cfg.tarred_audio_filepaths = None
+        if "shard_manifests" in ds_cfg:
+            ds_cfg.shard_manifests = False
 	
     model.change_vocabulary(new_tokenizer_dir=model_cfg.tokenizer.dir, new_tokenizer_type=model_cfg.tokenizer.type)
     model_cfg.train_ds.batch_size = 6
