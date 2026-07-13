@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from importlib import import_module
 from omegaconf import DictConfig, OmegaConf
-import pytorch_lightning as pl
+import lightning.pytorch as pl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
