@@ -37,7 +37,7 @@ def convert_to_nemo_manifest(input_path, output_path, audio_base_path):
 
     for i, entry in enumerate(tqdm(data, total=len(data))):
         try:
-            audio_file = entry['path'] + '.wav'
+            audio_file = entry['audio_path'] + '.wav'
             audio_path = os.path.join(audio_base_path, audio_file)
 
             transcription = entry['sentence']
