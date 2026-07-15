@@ -99,7 +99,7 @@ def setup_model(model, cfg: DictConfig) -> None:
             if "shard_manifests" in ds_cfg:
                 ds_cfg.shard_manifests = False
     model.change_vocabulary(new_tokenizer_dir=model_cfg.tokenizer.dir, new_tokenizer_type=model_cfg.tokenizer.type)
-    model.change_decoding_strategy(new_decoding_strategy=model_cfg.decoding.strategy)
+    model.change_decoding_strategy(decoding_cfg=model_cfg.decoding)
     model_cfg.train_ds.batch_size = 6
     model_cfg.validation_ds.batch_size = 6
     model_cfg.train_ds.max_duration = 30
