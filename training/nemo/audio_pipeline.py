@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import copy
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -54,11 +55,7 @@ class AudioNemoTrainer:
         val_dataloader = self.model._validation_dl
         results = self.trainer.validate(dataloaders=val_dataloader)
         return results[0] if results else {}
-
-
-import copy
-import json
-from pathlib import Path
+    
 
 class CurriculumAudioNemoTrainer(AudioNemoTrainer):
     def __init__(self, model_name, model_class, cfg):
@@ -133,6 +130,7 @@ if __name__ == "__main__":
 
     cfg = OmegaConf.load(args.config)
     if args.curriculum:
+        print("Using curriculum learning...")
         trainer = CurriculumAudioNemoTrainer(args.pretrained_model, args.model_class, cfg)
         print(trainer.train())
     else:
