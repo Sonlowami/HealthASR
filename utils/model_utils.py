@@ -1,3 +1,5 @@
+from xml.parsers.expat import model
+
 from dotenv import load_dotenv
 from huggingface_hub import login as hf_login
 import os
@@ -82,6 +84,7 @@ def setup_model(model, cfg: DictConfig) -> None:
     model_cfg.tokenizer.type = cfg['model']['tokenizer_type']
     model_cfg.train_ds.manifest_filepath = cfg['model']['train_ds']['manifest_filepath']
     model_cfg.validation_ds.manifest_filepath = cfg['model']['validation_ds']['manifest_filepath']
+    model_cfg.decoding.strategy = cfg['model']['decoding']['strategy']
 	
 
 	# Clear leftover tarred-dataset config inherited from the pretrained
@@ -96,6 +99,7 @@ def setup_model(model, cfg: DictConfig) -> None:
             if "shard_manifests" in ds_cfg:
                 ds_cfg.shard_manifests = False
     model.change_vocabulary(new_tokenizer_dir=model_cfg.tokenizer.dir, new_tokenizer_type=model_cfg.tokenizer.type)
+    model.change_decoding_strategy(new_decoding_strategy=model_cfg.decoding.strategy)
     model_cfg.train_ds.batch_size = 6
     model_cfg.validation_ds.batch_size = 6
     model_cfg.train_ds.max_duration = 30
