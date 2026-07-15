@@ -9,7 +9,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import utils.model_utils as model_utils
 import argparse
 from nemo.utils.exp_manager import exp_manager
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
+import utils.curriculun_utils as cutils
 
 class AudioNemoTrainer:
     def __init__(self, model_name: str | None, model_class: str, cfg: dict):
@@ -53,6 +54,71 @@ class AudioNemoTrainer:
         val_dataloader = self.model._validation_dl
         results = self.trainer.validate(dataloaders=val_dataloader)
         return results[0] if results else {}
+
+
+import copy
+import json
+from pathlib import Path
+
+class CurriculumAudioNemoTrainer(AudioNemoTrainer):
+    def __init__(self, model_name, model_class, cfg):
+        super().__init__(model_name, model_class, cfg)
+        self.curriculum_cfg = cfg.get("curriculum", {})
+
+
+    def run_curriculum(self):
+        model = self.setup_model()
+        schedule = self.curriculum_cfg.get("schedule", [0.2, 0.5, 0.7, 1.0])
+        epochs_per_stage = self.curriculum_cfg.get("epochs_per_stage")
+        score_batch_size = self.curriculum_cfg.get("score_batch_size", 16)
+        warmup_epochs = int(self.curriculum_cfg.get("warmup_epochs", 0))
+        base_manifest = self.cfg["model"]["train_ds"]["manifest_filepath"]
+
+        cumulative_epochs = 0
+        exp_dir = None
+        is_first_train = True
+
+        # --- 1. Optional Warmup Phase ---
+        if warmup_epochs > 0:
+            print(f"\n=== Curriculum Warmup: Training on full dataset for {warmup_epochs} epochs ===")
+            cumulative_epochs += warmup_epochs
+            self.trainer.fit_loop.max_epochs = cumulative_epochs
+            
+            # Initialize exp_manager only on the very first fit
+            if is_first_train:
+                exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
+                is_first_train = False
+                
+            self.trainer.fit(model)
+
+        # --- 2. Curriculum Stages ---
+        for stage_idx, active_fraction in enumerate(schedule, start=1):
+            print(f"\n=== Curriculum stage {stage_idx}/{len(schedule)} (fraction={active_fraction}) ===")
+
+            # Score using the model's current weights
+            ranked = cutils.score_manifest(model, self.trainer, base_manifest, batch_size=score_batch_size)
+
+            stage_manifest = f"/tmp/curriculum_stage_{stage_idx}.jsonl"
+            cutils.write_stage_manifest(ranked, active_fraction, stage_manifest)
+
+            # Update the dataset dynamically for this stage
+            stage_ds_cfg = copy.deepcopy(model.cfg.train_ds)
+            with open_dict(stage_ds_cfg):
+                stage_ds_cfg.manifest_filepath = stage_manifest
+            model.setup_training_data(stage_ds_cfg)
+
+            # Accumulate epochs and update the trainer
+            cumulative_epochs += int(epochs_per_stage[stage_idx - 1])
+            self.trainer.fit_loop.max_epochs = cumulative_epochs
+
+            # Initialize exp_manager if warmup was skipped and this is the first run
+            if is_first_train:
+                exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
+                is_first_train = False
+
+            self.trainer.fit(model)
+
+        return exp_dir
     
 
 if __name__ == "__main__":
@@ -62,9 +128,14 @@ if __name__ == "__main__":
     parser.add_argument("--pretrained_model", type=str, required=False, default=None, help="Name of the model to load.")
     parser.add_argument("--model_class", type=str, required=True, help="Dotted path to the model class.")
     parser.add_argument("--config", type=str, required=True, help="Path to the configuration file.")
+    parser.add_argument("--curriculum", action="store_true", help="Use curriculum learning.")
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
-    trainer = AudioNemoTrainer(args.pretrained_model, args.model_class, cfg)
-    print(trainer.train())
+    if args.curriculum:
+        trainer = CurriculumAudioNemoTrainer(args.pretrained_model, args.model_class, cfg)
+        print(trainer.train())
+    else:
+        trainer = AudioNemoTrainer(args.pretrained_model, args.model_class, cfg)
+    print(trainer.run_curriculum())
     #print(f"Training completed. Experiment directory: {exp_dir}")
