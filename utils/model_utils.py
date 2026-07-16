@@ -50,7 +50,10 @@ def load_model(model_name, model_class) -> None:
 				"Missing pretrained model name. Pass --pretrained_model or set "
 				"config.model.init_from_pretrained_model."
 			)
-		authenticate_huggingface()
+		try:
+			authenticate_huggingface()
+		except Exception as e:
+			print(f"Error occurred while authenticating with Hugging Face: {e}")
 		# The only line that depends on which model class is in use.
 		if os.path.exists(model_name):
 			# If the model name is a local path, load from the local checkpoint.

@@ -64,7 +64,7 @@ class CurriculumAudioNemoTrainer(AudioNemoTrainer):
 
 
     def run_curriculum(self):
-        model = self.setup_model()
+        self.setup_model()
         schedule = self.curriculum_cfg.get("schedule", [0.2, 0.5, 0.7, 1.0])
         epochs_per_stage = self.curriculum_cfg.get("epochs_per_stage")
         score_batch_size = self.curriculum_cfg.get("score_batch_size", 16)
@@ -86,23 +86,23 @@ class CurriculumAudioNemoTrainer(AudioNemoTrainer):
                 exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
                 is_first_train = False
                 
-            self.trainer.fit(model)
+            self.trainer.fit(self.model)
 
         # --- 2. Curriculum Stages ---
         for stage_idx, active_fraction in enumerate(schedule, start=1):
             print(f"\n=== Curriculum stage {stage_idx}/{len(schedule)} (fraction={active_fraction}) ===")
 
             # Score using the model's current weights
-            ranked = cutils.score_manifest(model, self.trainer, base_manifest, batch_size=score_batch_size)
+            ranked = cutils.score_manifest(self.model, self.trainer, base_manifest, batch_size=score_batch_size)
 
             stage_manifest = f"/tmp/curriculum_stage_{stage_idx}.jsonl"
             cutils.write_stage_manifest(ranked, active_fraction, stage_manifest)
 
             # Update the dataset dynamically for this stage
-            stage_ds_cfg = copy.deepcopy(model.cfg.train_ds)
+            stage_ds_cfg = copy.deepcopy(self.model.cfg.train_ds)
             with open_dict(stage_ds_cfg):
                 stage_ds_cfg.manifest_filepath = stage_manifest
-            model.setup_training_data(stage_ds_cfg)
+            self.model.setup_training_data(stage_ds_cfg)
 
             # Accumulate epochs and update the trainer
             cumulative_epochs += int(epochs_per_stage[stage_idx - 1])
@@ -113,7 +113,7 @@ class CurriculumAudioNemoTrainer(AudioNemoTrainer):
                 exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
                 is_first_train = False
 
-            self.trainer.fit(model)
+            self.trainer.fit(self.model)
 
         return exp_dir
     
