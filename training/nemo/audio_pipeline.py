@@ -132,8 +132,8 @@ if __name__ == "__main__":
     if args.curriculum:
         print("Using curriculum learning...")
         trainer = CurriculumAudioNemoTrainer(args.pretrained_model, args.model_class, cfg)
-        print(trainer.train())
+        print(trainer.run_curriculum())
     else:
         trainer = AudioNemoTrainer(args.pretrained_model, args.model_class, cfg)
-    print(trainer.run_curriculum())
+    print(trainer.train())
     #print(f"Training completed. Experiment directory: {exp_dir}")
