@@ -4,6 +4,7 @@ from omegaconf import open_dict
 from torch.utils.data import DataLoader
 import torch
 from nemo.collections.asr.data.audio_to_text_dataset import get_audio_to_text_bpe_dataset_from_config
+from tqdm import tqdm
 try:
     import editdistance
 except ImportError:
@@ -70,6 +71,8 @@ def score_manifest(model, trainer, manifest_path: str, batch_size: int = 16) -> 
         collate_fn=dataset.collate_fn,  # NeMo ASR datasets expose this
     )
 
+    progress_bar = tqdm(total=len(loader), desc="Scoring manifest", unit="rows")
+
     with open(manifest_path, encoding="utf-8") as f:
         manifest_rows = [json.loads(line) for line in f if line.strip()]
 
@@ -80,8 +83,8 @@ def score_manifest(model, trainer, manifest_path: str, batch_size: int = 16) -> 
     scored = []
     row_idx = 0
     with torch.no_grad():
-        for batch in loader:
-            signal, signal_len, tokens, token_len = batch
+        for batch in progress_bar:
+            signal, signal_len, _, _ = batch
             signal, signal_len = signal.to(device), signal_len.to(device)
 
             log_probs, encoded_len, _ = model.forward(input_signal=signal, input_signal_length=signal_len)
@@ -97,7 +100,7 @@ def score_manifest(model, trainer, manifest_path: str, batch_size: int = 16) -> 
 
                 scored.append({"wer": wer, "_manifest_row": manifest_rows[row_idx]})
                 row_idx += 1
-
+            progress_bar.update(1)
     model.train()
     scored.sort(key=lambda e: e["wer"])  # easiest (lowest WER) first
     return scored
