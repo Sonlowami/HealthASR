@@ -19,7 +19,7 @@ def load_data(input_path):
         df = pd.read_csv(input_path, sep=sep)
 
         # Expect columns: path, sentence, sentence_domain
-        required_cols = {"path", "sentence", "sentence_domain"}
+        required_cols = {"path", "sentence",}
         missing = required_cols - set(df.columns)
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
@@ -37,15 +37,15 @@ def convert_to_nemo_manifest(input_path, output_path, audio_base_path):
 
     for i, entry in enumerate(tqdm(data, total=len(data))):
         try:
-            audio_file = entry['path'] + '.wav'
+            audio_file = entry['audio_path']
             audio_path = os.path.join(audio_base_path, audio_file)
 
             transcription = entry['sentence']
-            #duration = entry['duration']
+            duration = entry['duration_sec']
 
             manifest_lines.append({
                 "audio_filepath": audio_path,
-                #"duration": float(duration),
+                "duration": float(duration),
                 "text": str(transcription).strip()
             })
 
@@ -54,7 +54,8 @@ def convert_to_nemo_manifest(input_path, output_path, audio_base_path):
 
     # Write the entire manifest as a single JSON array (JSONL previously)
     with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(manifest_lines, f, ensure_ascii=False, indent=2)
+        for line in manifest_lines:
+            f.write(json.dumps(line, ensure_ascii=False) + '\n')
 
 
 if __name__ == '__main__':

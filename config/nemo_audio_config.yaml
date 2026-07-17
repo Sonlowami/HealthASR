@@ -1,0 +1,40 @@
+model:
+  init_from_pretrained_model: nvidia/parakeet-ctc-1.1b
+  tokenizer_dir: ./kinyarwanda_tokenizers/tokenizer_spe_bpe_v1024
+  tokenizer_type: bpe
+  train_ds:
+    manifest_filepath: /shared/A_track/train_processed.json
+    batch_size: 8
+    max_duration: 30.0
+  validation_ds:
+    manifest_filepath: /shared/A_track/val_processed.json
+    batch_size: 16
+    max_duration: 30.0
+  optim:
+    name: adamw
+    lr: 0.0001
+    betas:
+    - 0.9
+    - 0.98
+    weight_decay: 0.001
+    sched:
+      name: CosineAnnealing
+      warmup_steps: 2000
+trainer:
+  accelerator: gpu
+  devices: 1
+  max_epochs: 50
+  precision: bf16
+exp_manager:
+  exp_dir: ./nemo_experiments
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    name: parakeet-kinyarwanda-two-phase-finetune
+    project: nemo-asr
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    monitor: val_wer
+    mode: min
+    save_top_k: 5
+    filename: '{epoch}-{step}-{val_wer:.2f}'
+    verbose: true
