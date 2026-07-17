@@ -73,7 +73,8 @@ def score_manifest(model, trainer, manifest_path: str, batch_size: int = 16) -> 
     with open(manifest_path, encoding="utf-8") as f:
         manifest_rows = [json.loads(line) for line in f if line.strip()]
 
-    device = next(model.parameters()).device
+    device = trainer.strategy.root_device if trainer.strategy else torch.device("cpu")
+    model.to(device)
     model.eval()
 
     scored = []
