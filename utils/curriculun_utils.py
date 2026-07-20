@@ -5,6 +5,8 @@ from torch.utils.data import DataLoader
 import torch
 from nemo.collections.asr.data.audio_to_text_dataset import get_audio_to_text_bpe_dataset_from_config
 from tqdm import tqdm
+import re
+from pathlib import Path
 try:
     import editdistance
 except ImportError:
@@ -112,3 +114,38 @@ def write_stage_manifest(ranked_entries: list[dict], active_fraction: float, out
         for row in subset:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     return out_path
+
+
+def find_last_checkpoint(checkpoint_dir: str) -> tuple[int, str] | tuple[None, None]:
+    """
+    Find the checkpoint with the highest epoch, by parsing filenames
+    (pattern: '{epoch}-{step}-{val_wer:.2f}.ckpt') — no need to load the
+    file itself just to discover how far training got.
+    Returns (epoch, path) or (None, None) if no checkpoints exist.
+    """
+    ckpt_dir = Path(checkpoint_dir)
+    if not ckpt_dir.is_dir():
+        return None, None
+
+    best_epoch, best_path = None, None
+    for ckpt_file in ckpt_dir.glob("*.ckpt"):
+        match = re.search(r"epoch=(\d+)", ckpt_file.name)
+        if match:
+            epoch = int(match.group(1))
+            if best_epoch is None or epoch > best_epoch:
+                best_epoch, best_path = epoch, str(ckpt_file)
+    return best_epoch, best_path
+
+
+def preload_weights(model, checkpoint_path: str, device) -> None:
+    """
+    Manually load just the model's weights from a checkpoint, so a
+    score_manifest() call BEFORE trainer.fit() reflects real trained
+    progress rather than freshly-initialized (post change_vocabulary)
+    weights. trainer.fit()'s own resume will reload the same weights
+    again along with optimizer/scheduler/epoch state — redundant but
+    harmless.
+    """
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    state_dict = checkpoint.get("state_dict", checkpoint)
+    model.load_state_dict(state_dict)
