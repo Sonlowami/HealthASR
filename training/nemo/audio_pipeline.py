@@ -85,7 +85,7 @@ class CurriculumAudioNemoTrainer(AudioNemoTrainer):
         # Check for a checkpoint from a previous (crashed/interrupted) run.
         resume_epoch = None
         if self.cfg.exp_manager.get("resume_if_exists", False):
-            ckpt_dir = Path(self.cfg.exp_manager.exp_dir) / self.cfg.exp_manager.get("name", "default") / "checkpoints"
+            ckpt_dir = Path(self.cfg.exp_manager.get("explicit_log_dir"))
             resume_epoch, resume_ckpt_path = cutils.find_last_checkpoint(str(ckpt_dir))
             if resume_epoch is not None:
                 print(f"Found checkpoint at epoch {resume_epoch} — will skip already-completed "
