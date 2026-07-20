@@ -33,11 +33,11 @@ class AudioNemoTrainer:
         self.model = model
         self._is_setup = True
     
-    def train_nemo(self):
+    def train_nemo(self, setup_exp_manager: bool = True):
         """
         Train the model using the provided trainer.
         """
-        exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
+        exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager) if setup_exp_manager else None
         self.trainer.fit(self.model)
         return exp_dir
 
@@ -62,60 +62,119 @@ class CurriculumAudioNemoTrainer(AudioNemoTrainer):
         super().__init__(model_name, model_class, cfg)
         self.curriculum_cfg = cfg.get("curriculum", {})
 
-
     def run_curriculum(self):
         self.setup_model()
         schedule = self.curriculum_cfg.get("schedule", [0.2, 0.5, 0.7, 1.0])
         epochs_per_stage = self.curriculum_cfg.get("epochs_per_stage")
-        score_batch_size = self.curriculum_cfg.get("score_batch_size", 16)
         warmup_epochs = int(self.curriculum_cfg.get("warmup_epochs", 0))
+        score_batch_size = self.curriculum_cfg.get("score_batch_size", 16)
         base_manifest = self.cfg["model"]["train_ds"]["manifest_filepath"]
 
-        cumulative_epochs = 0
-        exp_dir = None
-        is_first_train = True
-
-        # --- 1. Optional Warmup Phase ---
+        # Deterministic epoch boundaries — same every run, since schedule/
+        # epochs_per_stage/warmup_epochs are static config values.
+        boundaries = []  # list of (label, start_epoch, end_epoch)
+        cursor = 0
         if warmup_epochs > 0:
-            print(f"\n=== Curriculum Warmup: Training on full dataset for {warmup_epochs} epochs ===")
-            cumulative_epochs += warmup_epochs
-            self.trainer.fit_loop.max_epochs = cumulative_epochs
-            
-            # Initialize exp_manager only on the very first fit
-            if is_first_train:
-                exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
-                is_first_train = False
-                
-            self.trainer.fit(self.model)
+            boundaries.append(("warmup", cursor, cursor + warmup_epochs))
+            cursor += warmup_epochs
+        for i, frac in enumerate(schedule):
+            end = cursor + int(epochs_per_stage[i])
+            boundaries.append((f"stage_{i+1}", cursor, end))
+            cursor = end
 
-        # --- 2. Curriculum Stages ---
-        for stage_idx, active_fraction in enumerate(schedule, start=1):
-            print(f"\n=== Curriculum stage {stage_idx}/{len(schedule)} (fraction={active_fraction}) ===")
+        # Check for a checkpoint from a previous (crashed/interrupted) run.
+        resume_epoch = None
+        if self.cfg.exp_manager.get("resume_if_exists", False):
+            ckpt_dir = Path(self.cfg.exp_manager.exp_dir) / self.cfg.exp_manager.get("name", "default") / "checkpoints"
+            resume_epoch, resume_ckpt_path = cutils.find_last_checkpoint(str(ckpt_dir))
+            if resume_epoch is not None:
+                print(f"Found checkpoint at epoch {resume_epoch} — will skip already-completed "
+                    f"curriculum stages and preload weights for the stage still in progress.")
+                device = self.trainer.strategy.root_device
+                cutils.preload_weights(self.model, resume_ckpt_path, device)
 
-            # Score using the model's current weights
-            ranked = cutils.score_manifest(self.model, self.trainer, base_manifest, batch_size=score_batch_size)
+        first_fit_call = True
+        exp_dir = None
 
-            stage_manifest = f"/tmp/curriculum_stage_{stage_idx}.jsonl"
-            cutils.write_stage_manifest(ranked, active_fraction, stage_manifest)
+        for label, start_epoch, end_epoch in boundaries:
+            if resume_epoch is not None and end_epoch <= resume_epoch:
+                print(f"Skipping {label} (epochs {start_epoch}-{end_epoch}) — already completed.")
+                continue
 
-            # Update the dataset dynamically for this stage
-            stage_ds_cfg = copy.deepcopy(self.model.cfg.train_ds)
-            with open_dict(stage_ds_cfg):
-                stage_ds_cfg.manifest_filepath = stage_manifest
-            self.model.setup_training_data(stage_ds_cfg)
+            print(f"\n=== Curriculum {label} (epochs {start_epoch}-{end_epoch}) ===")
 
-            # Accumulate epochs and update the trainer
-            cumulative_epochs += int(epochs_per_stage[stage_idx - 1])
-            self.trainer.fit_loop.max_epochs = cumulative_epochs
+            if label != "warmup":
+                # score using CURRENT weights — either freshly initialized
+                # (genuine fresh run) or preloaded above (resumed run)
+                ranked = cutils.score_manifest(self.model, self.trainer, base_manifest, batch_size=score_batch_size)
+                stage_manifest = f"/tmp/curriculum_{label}.jsonl"
+                active_fraction = schedule[int(label.split("_")[1]) - 1]
+                cutils.write_stage_manifest(ranked, active_fraction, stage_manifest)
 
-            # Initialize exp_manager if warmup was skipped and this is the first run
-            if is_first_train:
-                exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
-                is_first_train = False
+                stage_ds_cfg = copy.deepcopy(self.model.cfg.train_ds)
+                with open_dict(stage_ds_cfg):
+                    stage_ds_cfg.manifest_filepath = stage_manifest
+                self.model.setup_training_data(stage_ds_cfg)
 
-            self.trainer.fit(self.model)
+            self.trainer.fit_loop.max_epochs = end_epoch
+            exp_dir = self.train_nemo(setup_exp_manager=first_fit_call)
+            first_fit_call = False
 
         return exp_dir
+
+    # def run_curriculum(self):
+    #     self.setup_model()
+    #     schedule = self.curriculum_cfg.get("schedule", [0.2, 0.5, 0.7, 1.0])
+    #     epochs_per_stage = self.curriculum_cfg.get("epochs_per_stage")
+    #     score_batch_size = self.curriculum_cfg.get("score_batch_size", 16)
+    #     warmup_epochs = int(self.curriculum_cfg.get("warmup_epochs", 0))
+    #     base_manifest = self.cfg["model"]["train_ds"]["manifest_filepath"]
+
+    #     cumulative_epochs = 0
+    #     exp_dir = None
+    #     is_first_train = True
+
+    #     # --- 1. Optional Warmup Phase ---
+    #     if warmup_epochs > 0:
+    #         print(f"\n=== Curriculum Warmup: Training on full dataset for {warmup_epochs} epochs ===")
+    #         cumulative_epochs += warmup_epochs
+    #         self.trainer.fit_loop.max_epochs = cumulative_epochs
+            
+    #         # Initialize exp_manager only on the very first fit
+    #         if is_first_train:
+    #             exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
+    #             is_first_train = False
+                
+    #         self.trainer.fit(self.model)
+
+    #     # --- 2. Curriculum Stages ---
+    #     for stage_idx, active_fraction in enumerate(schedule, start=1):
+    #         print(f"\n=== Curriculum stage {stage_idx}/{len(schedule)} (fraction={active_fraction}) ===")
+
+    #         # Score using the model's current weights
+    #         ranked = cutils.score_manifest(self.model, self.trainer, base_manifest, batch_size=score_batch_size)
+
+    #         stage_manifest = f"/tmp/curriculum_stage_{stage_idx}.jsonl"
+    #         cutils.write_stage_manifest(ranked, active_fraction, stage_manifest)
+
+    #         # Update the dataset dynamically for this stage
+    #         stage_ds_cfg = copy.deepcopy(self.model.cfg.train_ds)
+    #         with open_dict(stage_ds_cfg):
+    #             stage_ds_cfg.manifest_filepath = stage_manifest
+    #         self.model.setup_training_data(stage_ds_cfg)
+
+    #         # Accumulate epochs and update the trainer
+    #         cumulative_epochs += int(epochs_per_stage[stage_idx - 1])
+    #         self.trainer.fit_loop.max_epochs = cumulative_epochs
+
+    #         # Initialize exp_manager if warmup was skipped and this is the first run
+    #         if is_first_train:
+    #             exp_dir = exp_manager(self.trainer, cfg=self.cfg.exp_manager)
+    #             is_first_train = False
+
+    #         self.trainer.fit(self.model)
+
+    #     return exp_dir
     
 
 if __name__ == "__main__":
