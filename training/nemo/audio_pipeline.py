@@ -97,6 +97,7 @@ class CurriculumAudioNemoTrainer(AudioNemoTrainer):
         exp_dir = None
 
         for label, start_epoch, end_epoch in boundaries:
+            print(f"\n=== Curriculum {label} (epochs {start_epoch}-{end_epoch}) ===")
             if resume_epoch is not None and end_epoch <= resume_epoch:
                 print(f"Skipping {label} (epochs {start_epoch}-{end_epoch}) — already completed.")
                 continue
