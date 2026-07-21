@@ -1,0 +1,11 @@
+torch
+transformers
+datasets[audio]
+soundfile
+librosa
+pandas
+pyyaml
+python-dotenv
+editdistance
+tqdm
+wandb

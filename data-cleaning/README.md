@@ -92,7 +92,7 @@ Download raw datasets into `data/raw/<language>/` locally — they are not store
 
 **Does:**
 1. **Verify** — check manifests load, columns exist, every audio file is on disk
-2. **Filter** — remove clips with empty text, missing/corrupt audio, or duration &lt; 3 s
+2. **Filter** — remove clips with empty text, missing/corrupt audio, or duration &lt; 2 s
 
 **Writes:**
 - `data/cleaned/<lang>/manifests/{train,dev,test}.tsv`
@@ -215,7 +215,7 @@ Train on original + augmented train manifests for more data. Use dev/test as-is 
 
 | Setting            | Value   | Purpose                          |
 |--------------------|---------|----------------------------------|
-| `MIN_DURATION_SEC` | 3.0     | Drop clips shorter than this     |
+| `MIN_DURATION_SEC` | 2.0     | Drop clips shorter than this     |
 | `SAMPLE_RATE`      | 16000   | Resample target (Hz)             |
 | `N_MELS`           | 80      | Mel bands in spectrogram         |
 | `HOP_LENGTH`       | 160     | 10 ms per frame at 16 kHz        |
