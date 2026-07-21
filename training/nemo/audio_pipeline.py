@@ -86,7 +86,7 @@ class CurriculumAudioNemoTrainer(AudioNemoTrainer):
         resume_epoch = None
         if self.cfg.exp_manager.get("resume_if_exists", False):
             ckpt_dir = Path(self.cfg.exp_manager.get("explicit_log_dir"))
-            resume_epoch, resume_ckpt_path = cutils.find_last_checkpoint(str(ckpt_dir)) / "checkpoints"
+            resume_epoch, resume_ckpt_path = cutils.find_last_checkpoint(str(ckpt_dir / "checkpoints"))
             if resume_epoch is not None:
                 print(f"Found checkpoint at epoch {resume_epoch} — will skip already-completed "
                     f"curriculum stages and preload weights for the stage still in progress.")
