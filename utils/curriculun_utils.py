@@ -146,6 +146,6 @@ def preload_weights(model, checkpoint_path: str, device) -> None:
     again along with optimizer/scheduler/epoch state — redundant but
     harmless.
     """
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     state_dict = checkpoint.get("state_dict", checkpoint)
     model.load_state_dict(state_dict)
