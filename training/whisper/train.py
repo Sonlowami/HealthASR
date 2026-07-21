@@ -28,7 +28,9 @@ import curriculum
 
 AUDIO_COLS = ("audio_path", "audio_filepath", "path", "filename", "file", "audio")
 TEXT_COLS = ("transcript", "text", "sentence", "transcription")
-MAX_LABEL_LEN = 448  # Whisper decoder context limit
+DURATION_COLS = ("duration_sec", "duration")
+MAX_LABEL_LEN = 448      # Whisper decoder context limit
+MAX_AUDIO_SEC = 30.0     # Whisper encoder window; longer clips would silently truncate
 
 
 def load_manifest(path: str, audio_dir: str | None = None) -> pd.DataFrame:
@@ -41,6 +43,12 @@ def load_manifest(path: str, audio_dir: str | None = None) -> pd.DataFrame:
     cols = {c.lower(): c for c in df.columns}
     audio_col = next(cols[c] for c in AUDIO_COLS if c in cols)
     text_col = next(cols[c] for c in TEXT_COLS if c in cols)
+    dur_col = next((cols[c] for c in DURATION_COLS if c in cols), None)
+    if dur_col:  # drop clips beyond Whisper's window: audio would truncate but labels wouldn't
+        too_long = df[dur_col].astype(float) > MAX_AUDIO_SEC
+        if too_long.any():
+            print(f"{p.name}: dropping {int(too_long.sum())} clips longer than {MAX_AUDIO_SEC}s")
+            df = df[~too_long]
     audio = df[audio_col].astype(str)
     if audio_dir:
         audio = audio.map(lambda a: str(Path(audio_dir) / a))
