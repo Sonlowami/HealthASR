@@ -125,7 +125,6 @@ def find_last_checkpoint(checkpoint_dir: str) -> tuple[int, str] | tuple[None, N
     """
     ckpt_dir = Path(checkpoint_dir)
     if not ckpt_dir.is_dir():
-        print(f"Checkpoint directory {checkpoint_dir} does not exist or is not a directory.")
         return None, None
 
     best_epoch, best_path = None, None
@@ -135,7 +134,6 @@ def find_last_checkpoint(checkpoint_dir: str) -> tuple[int, str] | tuple[None, N
             epoch = int(match.group(1))
             if best_epoch is None or epoch > best_epoch:
                 best_epoch, best_path = epoch, str(ckpt_file)
-    print(f"Found last checkpoint: {best_path} at epoch {best_epoch}" if best_path else "No checkpoints found.")
     return best_epoch, best_path
 
 
