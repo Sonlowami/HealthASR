@@ -1,6 +1,8 @@
 """Per-sample WER scoring and stage selection for Whisper curriculum learning."""
 import re
 
+import numpy as np
+import soundfile as sf
 import torch
 from tqdm import tqdm
 
@@ -8,6 +10,17 @@ try:
     import editdistance
 except ImportError:
     editdistance = None
+
+
+def load_audio(path: str) -> np.ndarray:
+    """Read audio as 16 kHz mono float32 (no ffmpeg/torchcodec needed for WAV)."""
+    wav, sr = sf.read(path, dtype="float32")
+    if wav.ndim > 1:
+        wav = wav.mean(axis=1)
+    if sr != 16000:
+        import librosa
+        wav = librosa.resample(wav, orig_sr=sr, target_sr=16000)
+    return wav
 
 
 def _edits(ref: list[str], hyp: list[str]) -> int:
@@ -43,7 +56,7 @@ def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 3
     for start in tqdm(range(0, len(dataset), batch_size), desc=f"Scoring ({language})"):
         rows = dataset[start:start + batch_size]
         feats = processor.feature_extractor(
-            [a["array"] for a in rows["audio"]], sampling_rate=16000, return_tensors="pt"
+            [load_audio(p) for p in rows["audio"]], sampling_rate=16000, return_tensors="pt"
         ).input_features.to(device=device, dtype=model.dtype)
         with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
             ids = model.generate(feats, language=language, task="transcribe")

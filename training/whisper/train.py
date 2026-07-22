@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 import yaml
-from datasets import Audio, Dataset, concatenate_datasets
+from datasets import Dataset, concatenate_datasets
 from dotenv import load_dotenv
 from transformers import (
     EarlyStoppingCallback,
@@ -63,8 +63,8 @@ def build_language_datasets(cfg: dict) -> dict:
         for split in ("train", "eval"):
             df = load_manifest(lc[f"{split}_manifest"], lc.get("audio_dir"))
             df["lang_token_id"] = entry["token_id"]
-            ds = Dataset.from_pandas(df, preserve_index=False)
-            entry[split] = ds.cast_column("audio", Audio(sampling_rate=16000))
+            # "audio" stays a path string; WAVs are read with soundfile at batch time
+            entry[split] = Dataset.from_pandas(df, preserve_index=False)
         out[name] = entry
     return out
 
@@ -83,7 +83,8 @@ def make_collator(processor):
 
     def collate(batch):
         feats = processor.feature_extractor(
-            [ex["audio"]["array"] for ex in batch], sampling_rate=16000, return_tensors="pt"
+            [curriculum.load_audio(ex["audio"]) for ex in batch],
+            sampling_rate=16000, return_tensors="pt",
         ).input_features
         labels = []
         for ex in batch:
