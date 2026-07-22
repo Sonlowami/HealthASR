@@ -37,7 +37,9 @@ curriculum:
   mode: teacher_wer          # teacher_wer | static
   schedule: [0.2, 0.5, 0.7, 1.0]
   epochs_per_stage: [1, 1, 1, 1]
-  score_batch_size: 32       # teacher WER generate() batch size
+  score_batch_size: 64       # teacher WER generate() batch (inference-only; raise if VRAM allows)
+  score_num_workers: 16      # parallel WAV decode during ranking (NeMo uses DataLoader workers too)
+  score_max_new_tokens: 128  # cap hyp length so generate() cannot run away
   # static-only knobs (used when mode: static)
   compute_snr: false
   weights:

@@ -1,9 +1,10 @@
-"""Curriculum helpers: static difficulty ranking + optional WER eval scoring."""
+"""Curriculum helpers: teacher WER ranking + optional static difficulty."""
 import re
 
 import numpy as np
 import soundfile as sf
 import torch
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 try:
@@ -47,7 +48,6 @@ def _minmax(x: np.ndarray) -> np.ndarray:
 
 
 def _estimate_snr_db(wav: np.ndarray, frame: int = 400) -> float:
-    """Rough SNR: high-energy frames = signal, low-energy = noise."""
     if len(wav) < frame * 2:
         return 0.0
     n = len(wav) // frame
@@ -58,10 +58,7 @@ def _estimate_snr_db(wav: np.ndarray, frame: int = 400) -> float:
 
 
 def static_difficulty(dataset, weights: dict | None = None, compute_snr: bool = False) -> list[float]:
-    """
-    One-shot difficulty scores (higher = harder). Uses transcript stats + duration;
-    optionally opens audio for SNR. Rank once before training — no model needed.
-    """
+    """Metadata difficulty (higher = harder). Optional SNR reads every WAV."""
     weights = {
         "duration": 0.30,
         "transcript_len": 0.30,
@@ -96,7 +93,7 @@ def static_difficulty(dataset, weights: dict | None = None, compute_snr: bool = 
             if compute_snr:
                 snr[i] = _estimate_snr_db(wav)
 
-    speaking_rate = n_words / np.maximum(duration, 0.1)  # words / sec
+    speaking_rate = n_words / np.maximum(duration, 0.1)
     score = (
         weights["duration"] * _minmax(duration)
         + weights["transcript_len"] * _minmax(n_words)
@@ -104,39 +101,70 @@ def static_difficulty(dataset, weights: dict | None = None, compute_snr: bool = 
         + weights["complexity"] * _minmax(avg_word_len)
     )
     if compute_snr:
-        score = score + weights["snr"] * (1.0 - _minmax(snr))  # low SNR → harder
+        score = score + weights["snr"] * (1.0 - _minmax(snr))
     return score.tolist()
 
 
 def easiest_fraction(scores: list[float], fraction: float) -> list[int]:
-    """Indices of the easiest (lowest score) `fraction` of samples."""
     n = max(1, int(len(scores) * fraction))
     return sorted(range(len(scores)), key=lambda i: scores[i])[:n]
 
 
 @torch.no_grad()
-def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 32):
+def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 32,
+              num_workers: int = 8, max_new_tokens: int = 128):
     """
-    Teacher WER pass: decode every clip, return (per_sample_wers, corpus_wer).
-    Used for Nzeyimana-style curriculum ranking (once) and for --eval_only.
-    Lower WER = easier.
+    Teacher WER via Whisper generate() (autoregressive — much slower than NeMo CTC).
+
+    NeMo score_manifest does: forward() + ctc_decoder_predictions_tensor (one pass).
+    Whisper must generate token-by-token, so the same ranking is ~5–10× slower.
+    Speeds: parallel WAV load (DataLoader workers), larger batch, capped decode length.
     """
     device = next(model.parameters()).device
     language = processor.tokenizer.decode([lang_token_id])
     was_training = model.training
     model.eval()
 
+    # Map-style view for PyTorch DataLoader (parallel soundfile reads like NeMo num_workers)
+    class _PathDataset(torch.utils.data.Dataset):
+        def __init__(self, ds):
+            self.paths = ds["audio"]
+            self.texts = ds["text"]
+
+        def __len__(self):
+            return len(self.paths)
+
+        def __getitem__(self, i):
+            return self.paths[i], self.texts[i]
+
+    def _collate(batch):
+        paths, texts = zip(*batch)
+        wavs = [load_audio(p) for p in paths]
+        return list(wavs), list(texts)
+
+    loader = DataLoader(
+        _PathDataset(dataset),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=_collate,
+        pin_memory=(device.type == "cuda"),
+        persistent_workers=(num_workers > 0),
+    )
+
     wers, total_edits, total_words = [], 0, 0
-    for start in tqdm(range(0, len(dataset), batch_size), desc=f"Teacher WER ({language})"):
-        rows = dataset[start:start + batch_size]
+    for wavs, texts in tqdm(loader, desc=f"Teacher WER ({language})"):
         feats = processor.feature_extractor(
-            [load_audio(p) for p in rows["audio"]], sampling_rate=16000, return_tensors="pt"
+            wavs, sampling_rate=16000, return_tensors="pt"
         ).input_features.to(device=device, dtype=model.dtype)
         with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
-            ids = model.generate(feats, language=language, task="transcribe")
+            ids = model.generate(
+                feats, language=language, task="transcribe",
+                max_new_tokens=max_new_tokens, num_beams=1,
+            )
         hyps = processor.batch_decode(ids, skip_special_tokens=True)
 
-        for ref_text, hyp_text in zip(rows["text"], hyps):
+        for ref_text, hyp_text in zip(texts, hyps):
             ref, hyp = _norm(ref_text), _norm(hyp_text)
             edits = _edits(ref, hyp)
             wers.append(edits / len(ref) if ref else 0.0)

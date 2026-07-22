@@ -212,7 +212,11 @@ def main():
     if args.eval_only:
         for name, lang in langs.items():
             _, corpus_wer = curriculum.score_wer(
-                model, processor, lang["eval"], lang["token_id"], batch_size=score_bs)
+                model, processor, lang["eval"], lang["token_id"],
+                batch_size=score_bs,
+                num_workers=int(cfg.get("curriculum", {}).get("score_num_workers", 16)),
+                max_new_tokens=int(cfg.get("curriculum", {}).get("score_max_new_tokens", 128)),
+            )
             print(f"{name}: corpus WER {corpus_wer:.4f} over {len(lang['eval'])} samples")
         return
 
@@ -239,7 +243,11 @@ def main():
                 print(f"Teacher WER ranking for {name} ({len(lang['train'])} clips) "
                       f"— one pass only, ~hours for large sets...")
                 scores, corpus_wer = curriculum.score_wer(
-                    model, processor, lang["train"], lang["token_id"], batch_size=score_bs)
+                    model, processor, lang["train"], lang["token_id"],
+                    batch_size=score_bs,
+                    num_workers=int(cc.get("score_num_workers", 16)),
+                    max_new_tokens=int(cc.get("score_max_new_tokens", 128)),
+                )
                 print(f"  {name}: teacher corpus WER {corpus_wer:.4f}")
                 np.save(score_path, np.asarray(scores, dtype=np.float32))
                 print(f"  saved {score_path}")
