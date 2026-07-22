@@ -28,7 +28,7 @@ python training/whisper/train.py --config config/whisper_config.yaml --eval_only
 # 2. standard fine-tuning
 python training/whisper/train.py --config config/whisper_config.yaml
 
-# 3. curriculum: score per-sample WER, train in easiest-first stages
+# 3. curriculum: Sunbird WER rank once → train 20/50/70/100% stages
 python training/whisper/train.py --config config/whisper_config.yaml --curriculum
 
 # 4. evaluate the fine-tuned model: set checkpoint: ./whisper_experiments/kin-dav/final
@@ -40,7 +40,9 @@ python training/whisper/train.py --config config/whisper_config.yaml --curriculu
 - Language tokens (SALT scheme): Kinyarwanda `kin` = 50350, Kidaw'ida uses
   Swahili `swa` = 50318 as proxy. Set per language in the config.
 - `oversample` repeats a language's train set to counter data imbalance.
-- Curriculum ranks WER *within* each language, so every stage stays bilingual.
+- Curriculum: Sunbird ranks train clips by WER once (saved as
+  `wer_difficulty_*.npy`), then stages use 20% → 50% → 70% → 100%
+  easiest-first *within* each language (no rescoring between stages).
 - Early stopping monitors validation loss (paper recipe:
   `early_stopping_patience` eval rounds x `eval_steps`).
 - Anything under `training:` in the YAML is passed straight to HF

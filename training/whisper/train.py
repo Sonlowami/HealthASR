@@ -1,9 +1,9 @@
 """
-Fine-tune a Whisper checkpoint (Sunbird SALT) on combined Kinyarwanda + Kidaw'ida.
+Fine-tune Whisper (Sunbird SALT) on combined Kinyarwanda + Kidaw'ida.
 
 Run from the repo root:
   python training/whisper/train.py --config config/whisper_config.yaml --curriculum
-      # Nzeyimana-style: teacher WER rank once → stages 20/50/70/100%
+      # Sunbird WER rank once → stages 20/50/70/100%
   python training/whisper/train.py --config config/whisper_config.yaml --eval_only
   python training/whisper/train.py --config config/whisper_config.yaml --curriculum --resume
 """
@@ -226,21 +226,17 @@ def main():
     if args.curriculum:
         cc = cfg["curriculum"]
         schedule = cc["schedule"]
-        mode = cc.get("mode", "teacher_wer")  # teacher_wer (Nzeyimana) | static
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        # Rank once per language — never rescore between stages
+        # Rank once per language with Sunbird WER — never rescore between stages
         ranked = {}
         for name, lang in langs.items():
-            score_path = Path(output_dir) / (
-                f"wer_difficulty_{name}.npy" if mode == "teacher_wer" else f"difficulty_{name}.npy"
-            )
+            score_path = Path(output_dir) / f"wer_difficulty_{name}.npy"
             if score_path.is_file():
                 scores = np.load(score_path).tolist()
-                print(f"Loaded {mode} scores for {name} from {score_path} ({len(scores)} clips)")
-            elif mode == "teacher_wer":
-                # Sunbird (loaded model) = clean teacher; rank train clips by WER vs reference
-                print(f"Teacher WER ranking for {name} ({len(lang['train'])} clips) "
+                print(f"Loaded Sunbird WER scores for {name} from {score_path} ({len(scores)} clips)")
+            else:
+                print(f"Sunbird WER ranking for {name} ({len(lang['train'])} clips) "
                       f"— one pass only, ~hours for large sets...")
                 scores, corpus_wer = curriculum.score_wer(
                     model, processor, lang["train"], lang["token_id"],
@@ -248,17 +244,10 @@ def main():
                     num_workers=int(cc.get("score_num_workers", 16)),
                     max_new_tokens=int(cc.get("score_max_new_tokens", 128)),
                 )
-                print(f"  {name}: teacher corpus WER {corpus_wer:.4f}")
+                print(f"  {name}: Sunbird corpus WER {corpus_wer:.4f}")
                 np.save(score_path, np.asarray(scores, dtype=np.float32))
                 print(f"  saved {score_path}")
-            else:
-                print(f"Computing static difficulty for {name} ({len(lang['train'])} clips)...")
-                scores = curriculum.static_difficulty(
-                    lang["train"], weights=cc.get("weights"),
-                    compute_snr=bool(cc.get("compute_snr", False)))
-                np.save(score_path, np.asarray(scores, dtype=np.float32))
-                print(f"  saved {score_path}")
-            ranked[name] = sorted(range(len(scores)), key=lambda i: scores[i])  # lowest = easiest
+            ranked[name] = sorted(range(len(scores)), key=lambda i: scores[i])  # lowest WER = easiest
 
         for stage, fraction in enumerate(schedule, start=1):
             print(f"\n=== Curriculum stage {stage}/{len(schedule)} (fraction={fraction}) ===")
