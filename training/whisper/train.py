@@ -17,6 +17,7 @@ from datasets import Dataset, concatenate_datasets
 from dotenv import load_dotenv
 from transformers import (
     EarlyStoppingCallback,
+    GenerationConfig,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     WhisperForConditionalGeneration,
@@ -136,6 +137,10 @@ def main():
 
     processor = WhisperProcessor.from_pretrained(cfg["checkpoint"])
     model = WhisperForConditionalGeneration.from_pretrained(cfg["checkpoint"])
+    if not getattr(model.generation_config, "lang_to_id", None):
+        # outdated generation config (e.g. akera checkpoints): borrow the vanilla
+        # large-v3 one so generate(language=...) knows the language-token map
+        model.generation_config = GenerationConfig.from_pretrained("openai/whisper-large-v3")
     model.generation_config.forced_decoder_ids = None
     if torch.cuda.is_available():
         model.to("cuda")
