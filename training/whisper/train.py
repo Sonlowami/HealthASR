@@ -10,6 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
 import yaml
@@ -54,7 +55,10 @@ def load_manifest(path: str, audio_dir: str | None = None) -> pd.DataFrame:
     audio = df[audio_col].astype(str)
     if audio_dir:
         audio = audio.map(lambda a: str(Path(audio_dir) / a))
-    return pd.DataFrame({"audio": audio, "text": df[text_col].astype(str)})
+    out = {"audio": audio, "text": df[text_col].astype(str)}
+    if dur_col:
+        out["duration_sec"] = df[dur_col].astype(float)
+    return pd.DataFrame(out)
 
 
 def build_language_datasets(cfg: dict) -> dict:
@@ -216,14 +220,31 @@ def main():
 
     if args.curriculum:
         cc = cfg["curriculum"]
-        for stage, fraction in enumerate(cc["schedule"], start=1):
-            print(f"\n=== Curriculum stage {stage}/{len(cc['schedule'])} (fraction={fraction}) ===")
+        schedule = cc["schedule"]
+        weights = cc.get("weights")
+        compute_snr = bool(cc.get("compute_snr", False))
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        # Rank once per language (static) — score_wer is NOT used between stages
+        ranked = {}
+        for name, lang in langs.items():
+            score_path = Path(output_dir) / f"difficulty_{name}.npy"
+            if score_path.is_file():
+                scores = np.load(score_path).tolist()
+                print(f"Loaded static difficulty for {name} from {score_path} ({len(scores)} clips)")
+            else:
+                print(f"Computing static difficulty for {name} ({len(lang['train'])} clips)...")
+                scores = curriculum.static_difficulty(lang["train"], weights=weights, compute_snr=compute_snr)
+                np.save(score_path, np.asarray(scores, dtype=np.float32))
+                print(f"  saved {score_path}")
+            ranked[name] = sorted(range(len(scores)), key=lambda i: scores[i])  # easiest first
+
+        for stage, fraction in enumerate(schedule, start=1):
+            print(f"\n=== Curriculum stage {stage}/{len(schedule)} (fraction={fraction}) ===")
             parts, repeats = [], []
-            for name, lang in langs.items():  # rank within each language so every stage is bilingual
-                wers, corpus_wer = curriculum.score_wer(
-                    model, processor, lang["train"], lang["token_id"], batch_size=score_bs)
-                keep = curriculum.easiest_fraction(wers, fraction)
-                print(f"  {name}: train WER {corpus_wer:.4f}, keeping {len(keep)}/{len(wers)}")
+            for name, lang in langs.items():
+                n = max(1, int(len(ranked[name]) * fraction))
+                keep = ranked[name][:n]
+                print(f"  {name}: keeping {len(keep)}/{len(lang['train'])}")
                 parts.append(lang["train"].select(keep))
                 repeats.append(lang["oversample"])
             stage_dir = f"{output_dir}/stage_{stage}"
@@ -231,7 +252,6 @@ def main():
                 model, processor, combine(parts, repeats), eval_ds, cfg,
                 stage_dir, wer_samples=wer_samples,
                 num_train_epochs=float(cc["epochs_per_stage"][stage - 1]))
-            # Resume only if this stage already has checkpoints (multi-job wall-time splits)
             resume = args.resume and any(Path(stage_dir).glob("checkpoint-*"))
             trainer.train(resume_from_checkpoint=True if resume else None)
     else:

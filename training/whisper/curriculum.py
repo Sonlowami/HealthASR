@@ -1,4 +1,4 @@
-"""Per-sample WER scoring and stage selection for Whisper curriculum learning."""
+"""Curriculum helpers: static difficulty ranking + optional WER eval scoring."""
 import re
 
 import numpy as np
@@ -24,7 +24,6 @@ def load_audio(path: str) -> np.ndarray:
 
 
 def _edits(ref: list[str], hyp: list[str]) -> int:
-    """Levenshtein distance; falls back to DP if editdistance isn't installed."""
     if editdistance:
         return editdistance.eval(ref, hyp)
     prev = list(range(len(hyp) + 1))
@@ -37,16 +36,87 @@ def _edits(ref: list[str], hyp: list[str]) -> int:
 
 
 def _norm(text: str) -> list[str]:
-    """Lowercase, strip punctuation, split into words (for fair WER)."""
     return re.sub(r"[^\w\s]", "", text.lower()).split()
+
+
+def _minmax(x: np.ndarray) -> np.ndarray:
+    lo, hi = float(x.min()), float(x.max())
+    if hi - lo < 1e-8:
+        return np.zeros_like(x, dtype=np.float64)
+    return (x - lo) / (hi - lo)
+
+
+def _estimate_snr_db(wav: np.ndarray, frame: int = 400) -> float:
+    """Rough SNR: high-energy frames = signal, low-energy = noise."""
+    if len(wav) < frame * 2:
+        return 0.0
+    n = len(wav) // frame
+    energies = np.array([(wav[i * frame:(i + 1) * frame] ** 2).mean() for i in range(n)]) + 1e-12
+    noise = np.percentile(energies, 20)
+    signal = np.percentile(energies, 80)
+    return float(10.0 * np.log10(signal / noise))
+
+
+def static_difficulty(dataset, weights: dict | None = None, compute_snr: bool = False) -> list[float]:
+    """
+    One-shot difficulty scores (higher = harder). Uses transcript stats + duration;
+    optionally opens audio for SNR. Rank once before training — no model needed.
+    """
+    weights = {
+        "duration": 0.30,
+        "transcript_len": 0.30,
+        "speaking_rate": 0.15,
+        "snr": 0.15,
+        "complexity": 0.10,
+        **(weights or {}),
+    }
+    n = len(dataset)
+    texts = dataset["text"]
+    has_dur = "duration_sec" in dataset.column_names
+    duration = np.zeros(n, dtype=np.float64)
+    n_words = np.zeros(n, dtype=np.float64)
+    avg_word_len = np.zeros(n, dtype=np.float64)
+    snr = np.zeros(n, dtype=np.float64)
+
+    if has_dur and not compute_snr:
+        duration[:] = np.asarray(dataset["duration_sec"], dtype=np.float64)
+        for i, text in enumerate(tqdm(texts, desc="Static difficulty", leave=False)):
+            words = _norm(text)
+            n_words[i] = max(len(words), 1)
+            avg_word_len[i] = np.mean([len(w) for w in words]) if words else 0.0
+    else:
+        paths = dataset["audio"]
+        dur_col = list(dataset["duration_sec"]) if has_dur else [None] * n
+        for i in tqdm(range(n), desc="Static difficulty (+SNR)" if compute_snr else "Static difficulty", leave=False):
+            words = _norm(texts[i])
+            n_words[i] = max(len(words), 1)
+            avg_word_len[i] = np.mean([len(w) for w in words]) if words else 0.0
+            wav = load_audio(paths[i])
+            duration[i] = float(dur_col[i]) if dur_col[i] is not None else len(wav) / 16000.0
+            if compute_snr:
+                snr[i] = _estimate_snr_db(wav)
+
+    speaking_rate = n_words / np.maximum(duration, 0.1)  # words / sec
+    score = (
+        weights["duration"] * _minmax(duration)
+        + weights["transcript_len"] * _minmax(n_words)
+        + weights["speaking_rate"] * _minmax(speaking_rate)
+        + weights["complexity"] * _minmax(avg_word_len)
+    )
+    if compute_snr:
+        score = score + weights["snr"] * (1.0 - _minmax(snr))  # low SNR → harder
+    return score.tolist()
+
+
+def easiest_fraction(scores: list[float], fraction: float) -> list[int]:
+    """Indices of the easiest (lowest score) `fraction` of samples."""
+    n = max(1, int(len(scores) * fraction))
+    return sorted(range(len(scores)), key=lambda i: scores[i])[:n]
 
 
 @torch.no_grad()
 def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 32):
-    """
-    Transcribe every row of `dataset` (columns: audio, text) with the language
-    forced to `lang_token_id`. Returns (per_sample_wers, corpus_wer).
-    """
+    """Full WER pass (used by --eval_only, not by static curriculum)."""
     device = next(model.parameters()).device
     language = processor.tokenizer.decode([lang_token_id])
     was_training = model.training
@@ -72,9 +142,3 @@ def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 3
     if was_training:
         model.train()
     return wers, (total_edits / total_words if total_words else 0.0)
-
-
-def easiest_fraction(wers: list[float], fraction: float) -> list[int]:
-    """Indices of the easiest (lowest-WER) `fraction` of samples."""
-    n = max(1, int(len(wers) * fraction))
-    return sorted(range(len(wers)), key=lambda i: wers[i])[:n]

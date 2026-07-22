@@ -33,6 +33,14 @@ training:  # passed straight to Seq2SeqTrainingArguments (add any HF arg here)
   early_stopping_patience: 4   # eval rounds; x eval_steps = the paper's 4000-step patience
 
 curriculum:
-  schedule: [0.5, 0.75, 1.0]   # fraction of each language kept per stage (easiest first)
-  epochs_per_stage: [1, 1, 1]
-  score_batch_size: 32
+  # Static curriculum (NeMo-style fractions): rank once, no rescoring between stages
+  schedule: [0.2, 0.5, 0.7, 1.0]
+  epochs_per_stage: [1, 1, 1, 1]
+  compute_snr: false   # true = also use SNR (reads every WAV once; slower)
+  weights:             # higher feature → harder (SNR inverted when enabled)
+    duration: 0.30
+    transcript_len: 0.30
+    speaking_rate: 0.15
+    snr: 0.15
+    complexity: 0.10
+  score_batch_size: 32  # only used by --eval_only WER passes
