@@ -1,4 +1,5 @@
 """Curriculum helpers: Sunbird WER ranking (once) + stage selection."""
+import logging
 import re
 
 import numpy as np
@@ -57,10 +58,11 @@ def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 3
     language = processor.tokenizer.decode([lang_token_id])
     was_training = model.training
     model.eval()
-    # Prefer max_new_tokens only — clear conflicting max_length on generation_config
-    gen_cfg = model.generation_config
-    prev_max_length = gen_cfg.max_length
-    gen_cfg.max_length = None
+    # Whisper generation_config always has max_length; we pass max_new_tokens.
+    # HF logs a harmless conflict every batch — silence just that logger.
+    gen_logger = logging.getLogger("transformers.generation.utils")
+    prev_gen_level = gen_logger.level
+    gen_logger.setLevel(logging.ERROR)
 
     class _PathDataset(torch.utils.data.Dataset):
         def __init__(self, ds):
@@ -108,7 +110,7 @@ def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 3
                 total_edits += edits
                 total_words += len(ref)
     finally:
-        gen_cfg.max_length = prev_max_length
+        gen_logger.setLevel(prev_gen_level)
         if was_training:
             model.train()
     return wers, (total_edits / total_words if total_words else 0.0)
