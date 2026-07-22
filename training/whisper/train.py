@@ -130,6 +130,8 @@ def main():
     parser.add_argument("--config", required=True, help="Path to whisper_config.yaml")
     parser.add_argument("--curriculum", action="store_true", help="Staged easiest-first training")
     parser.add_argument("--eval_only", action="store_true", help="Report per-language WER and exit")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from the latest checkpoint under output_dir (for multi-job runs)")
     args = parser.parse_args()
 
     load_dotenv()  # HF_TOKEN for the gated Sunbird checkpoint
@@ -170,16 +172,22 @@ def main():
                 print(f"  {name}: train WER {corpus_wer:.4f}, keeping {len(keep)}/{len(wers)}")
                 parts.append(lang["train"].select(keep))
                 repeats.append(lang["oversample"])
+            stage_dir = f"{output_dir}/stage_{stage}"
             trainer = build_trainer(
                 model, processor, combine(parts, repeats), eval_ds, cfg,
-                f"{output_dir}/stage_{stage}",
+                stage_dir,
                 num_train_epochs=float(cc["epochs_per_stage"][stage - 1]))
-            trainer.train()
+            # Resume only if this stage already has checkpoints (multi-job wall-time splits)
+            resume = args.resume and any(Path(stage_dir).glob("checkpoint-*"))
+            trainer.train(resume_from_checkpoint=True if resume else None)
     else:
         train_ds = combine([l["train"] for l in langs.values()],
                            [l["oversample"] for l in langs.values()])
         trainer = build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir)
-        trainer.train()
+        resume = args.resume and any(Path(output_dir).glob("checkpoint-*"))
+        if args.resume and not resume:
+            print(f"--resume set but no checkpoint-* found under {output_dir}; starting fresh.")
+        trainer.train(resume_from_checkpoint=True if resume else None)
 
     model.save_pretrained(f"{output_dir}/final")
     processor.save_pretrained(f"{output_dir}/final")
