@@ -116,14 +116,18 @@ def easiest_fraction(scores: list[float], fraction: float) -> list[int]:
 
 @torch.no_grad()
 def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 32):
-    """Full WER pass (used by --eval_only, not by static curriculum)."""
+    """
+    Teacher WER pass: decode every clip, return (per_sample_wers, corpus_wer).
+    Used for Nzeyimana-style curriculum ranking (once) and for --eval_only.
+    Lower WER = easier.
+    """
     device = next(model.parameters()).device
     language = processor.tokenizer.decode([lang_token_id])
     was_training = model.training
     model.eval()
 
     wers, total_edits, total_words = [], 0, 0
-    for start in tqdm(range(0, len(dataset), batch_size), desc=f"Scoring ({language})"):
+    for start in tqdm(range(0, len(dataset), batch_size), desc=f"Teacher WER ({language})"):
         rows = dataset[start:start + batch_size]
         feats = processor.feature_extractor(
             [load_audio(p) for p in rows["audio"]], sampling_rate=16000, return_tensors="pt"
