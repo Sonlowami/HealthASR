@@ -3,7 +3,7 @@
 # 'kin' = 50350; 50318 is Whisper's original Swahili token).
 # Usage: python training/whisper/train.py --config config/whisper_config_akera.yaml --eval_only
 checkpoint: akera/whisper-large-v3-kin-full
-output_dir: ./whisper_experiments/kin-dav-akera
+output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-akera
 
 languages:
   kinyarwanda:
