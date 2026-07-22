@@ -4,11 +4,11 @@ output_dir: ./whisper_experiments/kin-dav
 
 languages:
   kinyarwanda:
-    # Processed by teammate — update paths once known on orchard.
-    train_manifest: /shared/kinyarwanda/train_processed.tsv
-    eval_manifest: /shared/kinyarwanda/dev_processed.tsv
-    # audio_dir: /shared/kinyarwanda/audio   # optional prefix for relative paths in the manifest
-    lang_token_id: 50350   # 'kin' token in the SALT checkpoint
+    # Digital Umuganda Track B, processed by teammate (180,328 train / 9,343 dev clips)
+    train_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/train_processed.tsv
+    eval_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda  # manifest audio paths are relative
+    lang_token_id: 50350   # 'kin' token (SALT scheme; same ID in akera checkpoints)
     oversample: 1
   kidawida:
     train_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/train_processed.tsv
