@@ -1,0 +1,40 @@
+# Baseline comparison config: akera checkpoint instead of Sunbird SALT.
+# Same data, same token IDs (akera was trained with the SALT token scheme:
+# 'kin' = 50350; 50318 is Whisper's original Swahili token).
+# Usage: python training/whisper/train.py --config config/whisper_config_akera.yaml --eval_only
+checkpoint: akera/whisper-large-v3-kin-full
+output_dir: ./whisper_experiments/kin-dav-akera
+
+languages:
+  kinyarwanda:
+    # Digital Umuganda Track B, processed by teammate (180,328 train / 9,343 dev clips)
+    train_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/train_processed.tsv
+    eval_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda  # manifest audio paths are relative
+    lang_token_id: 50350   # 'kin' token (SALT scheme; same ID in akera checkpoints)
+    oversample: 1
+  kidawida:
+    train_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/train_processed.tsv
+    eval_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/pipeline_outputs/processed/kidawida  # manifest paths are relative
+    lang_token_id: 50318   # 'swa' (Swahili) as proxy — closest language to Kidaw'ida
+    oversample: 5          # counter the Kinyarwanda/Kidaw'ida data imbalance
+
+training:  # passed straight to Seq2SeqTrainingArguments (add any HF arg here)
+  learning_rate: 1.0e-5
+  per_device_train_batch_size: 32
+  per_device_eval_batch_size: 32
+  warmup_steps: 500
+  num_train_epochs: 3
+  eval_steps: 1000
+  save_steps: 1000
+  logging_steps: 50
+  dataloader_num_workers: 16
+  report_to: wandb
+  run_name: whisper-akera-kin-dav
+  early_stopping_patience: 4   # eval rounds; x eval_steps = the paper's 4000-step patience
+
+curriculum:
+  schedule: [0.5, 0.75, 1.0]   # fraction of each language kept per stage (easiest first)
+  epochs_per_stage: [1, 1, 1]
+  score_batch_size: 32
