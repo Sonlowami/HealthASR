@@ -57,6 +57,10 @@ def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 3
     language = processor.tokenizer.decode([lang_token_id])
     was_training = model.training
     model.eval()
+    # Prefer max_new_tokens only — clear conflicting max_length on generation_config
+    gen_cfg = model.generation_config
+    prev_max_length = gen_cfg.max_length
+    gen_cfg.max_length = None
 
     class _PathDataset(torch.utils.data.Dataset):
         def __init__(self, ds):
@@ -85,24 +89,26 @@ def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 3
     )
 
     wers, total_edits, total_words = [], 0, 0
-    for wavs, texts in tqdm(loader, desc=f"Sunbird WER ({language})"):
-        feats = processor.feature_extractor(
-            wavs, sampling_rate=16000, return_tensors="pt"
-        ).input_features.to(device=device, dtype=model.dtype)
-        with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
-            ids = model.generate(
-                feats, language=language, task="transcribe",
-                max_new_tokens=max_new_tokens, num_beams=1,
-            )
-        hyps = processor.batch_decode(ids, skip_special_tokens=True)
+    try:
+        for wavs, texts in tqdm(loader, desc=f"Sunbird WER ({language})"):
+            feats = processor.feature_extractor(
+                wavs, sampling_rate=16000, return_tensors="pt"
+            ).input_features.to(device=device, dtype=model.dtype)
+            with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
+                ids = model.generate(
+                    feats, language=language, task="transcribe",
+                    max_new_tokens=max_new_tokens, num_beams=1,
+                )
+            hyps = processor.batch_decode(ids, skip_special_tokens=True)
 
-        for ref_text, hyp_text in zip(texts, hyps):
-            ref, hyp = _norm(ref_text), _norm(hyp_text)
-            edits = _edits(ref, hyp)
-            wers.append(edits / len(ref) if ref else 0.0)
-            total_edits += edits
-            total_words += len(ref)
-
-    if was_training:
-        model.train()
+            for ref_text, hyp_text in zip(texts, hyps):
+                ref, hyp = _norm(ref_text), _norm(hyp_text)
+                edits = _edits(ref, hyp)
+                wers.append(edits / len(ref) if ref else 0.0)
+                total_edits += edits
+                total_words += len(ref)
+    finally:
+        gen_cfg.max_length = prev_max_length
+        if was_training:
+            model.train()
     return wers, (total_edits / total_words if total_words else 0.0)
