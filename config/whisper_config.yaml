@@ -11,8 +11,9 @@ languages:
     lang_token_id: 50350   # 'kin' token in the SALT checkpoint
     oversample: 1
   kidawida:
-    train_manifest: ./data-cleaning/data/processed/kidawida/manifests/train_processed.tsv
-    eval_manifest: ./data-cleaning/data/processed/kidawida/manifests/dev_processed.tsv
+    train_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/train_processed.tsv
+    eval_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/pipeline_outputs/processed/kidawida  # manifest paths are relative
     lang_token_id: 50318   # 'swa' (Swahili) as proxy — closest SALT language to Kidaw'ida
     oversample: 5          # counter the Kinyarwanda/Kidaw'ida data imbalance
 
