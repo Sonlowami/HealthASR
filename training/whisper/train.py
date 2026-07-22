@@ -20,6 +20,7 @@ from transformers import (
     GenerationConfig,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    TrainerCallback,
     WhisperForConditionalGeneration,
     WhisperProcessor,
 )
@@ -75,6 +76,53 @@ def combine(datasets: list[Dataset], repeats: list[int]) -> Dataset:
     return concatenate_datasets(parts).shuffle(seed=42)
 
 
+class WerSampleCallback(TrainerCallback):
+    """NeMo-style mid-training prints: WER reference / WER predicted on fixed eval clips."""
+
+    def __init__(self, processor, samples: list[dict], every_n_steps: int = 50):
+        self.processor = processor
+        self.samples = samples  # [{audio, text, lang_token_id}, ...]
+        self.every_n_steps = every_n_steps
+
+    @torch.no_grad()
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        if model is None or state.global_step == 0:
+            return
+        if state.global_step % self.every_n_steps != 0:
+            return
+        device = next(model.parameters()).device
+        was_training = model.training
+        model.eval()
+        for ex in self.samples:
+            language = self.processor.tokenizer.decode([ex["lang_token_id"]])
+            feats = self.processor.feature_extractor(
+                curriculum.load_audio(ex["audio"]), sampling_rate=16000, return_tensors="pt"
+            ).input_features.to(device=device, dtype=model.dtype)
+            with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
+                ids = model.generate(feats, language=language, task="transcribe")
+            hyp = self.processor.batch_decode(ids, skip_special_tokens=True)[0]
+            print(f"WER reference:{ex['text']}")
+            print(f"WER predicted:{hyp}")
+        if was_training:
+            model.train()
+
+
+def pick_wer_samples(langs: dict, n_per_lang: int = 2) -> list[dict]:
+    """Fixed first-N eval clips per language so ref/pred are comparable across steps."""
+    samples = []
+    for name, lang in langs.items():
+        n = min(n_per_lang, len(lang["eval"]))
+        for i in range(n):
+            row = lang["eval"][i]
+            samples.append({
+                "audio": row["audio"],
+                "text": row["text"],
+                "lang_token_id": row["lang_token_id"],
+                "language": name,
+            })
+    return samples
+
+
 def make_collator(processor):
     """Batch raw rows into (input_features, labels); labels get the per-row language token."""
     tok = processor.tokenizer
@@ -100,9 +148,11 @@ def make_collator(processor):
     return collate
 
 
-def build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir, **overrides):
+def build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir,
+                  wer_samples=None, **overrides):
     tc = dict(cfg["training"])
     patience = tc.pop("early_stopping_patience", 4)
+    log_every = int(tc.get("logging_steps", 50))
     args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         bf16=True,
@@ -115,13 +165,16 @@ def build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir, **overri
         remove_unused_columns=False,  # collator needs the raw audio/text columns
         **{**tc, **overrides},
     )
+    callbacks = [EarlyStoppingCallback(early_stopping_patience=patience)]
+    if wer_samples:
+        callbacks.append(WerSampleCallback(processor, wer_samples, every_n_steps=log_every))
     return Seq2SeqTrainer(
         model=model,
         args=args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         data_collator=make_collator(processor),
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)],
+        callbacks=callbacks,
     )
 
 
@@ -159,6 +212,7 @@ def main():
         return
 
     eval_ds = concatenate_datasets([l["eval"] for l in langs.values()])
+    wer_samples = pick_wer_samples(langs, n_per_lang=2)  # 2 kin + 2 dav, printed every logging_steps
 
     if args.curriculum:
         cc = cfg["curriculum"]
@@ -175,7 +229,7 @@ def main():
             stage_dir = f"{output_dir}/stage_{stage}"
             trainer = build_trainer(
                 model, processor, combine(parts, repeats), eval_ds, cfg,
-                stage_dir,
+                stage_dir, wer_samples=wer_samples,
                 num_train_epochs=float(cc["epochs_per_stage"][stage - 1]))
             # Resume only if this stage already has checkpoints (multi-job wall-time splits)
             resume = args.resume and any(Path(stage_dir).glob("checkpoint-*"))
@@ -183,7 +237,8 @@ def main():
     else:
         train_ds = combine([l["train"] for l in langs.values()],
                            [l["oversample"] for l in langs.values()])
-        trainer = build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir)
+        trainer = build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir,
+                                wer_samples=wer_samples)
         resume = args.resume and any(Path(output_dir).glob("checkpoint-*"))
         if args.resume and not resume:
             print(f"--resume set but no checkpoint-* found under {output_dir}; starting fresh.")
