@@ -1,6 +1,6 @@
-# Whisper fine-tuning: combined Kinyarwanda + Kidaw'ida, starting from Sunbird SALT.
+# Continue from curriculum final: one full-data stage, 3 epochs (no 20/50/70 replay).
 checkpoint: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-wer-cl/final
-output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-wer-cl
+output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-wer-cl-full3
 
 languages:
   kinyarwanda:
@@ -18,24 +18,24 @@ languages:
     oversample: 5          # counter the Kinyarwanda/Kidaw'ida data imbalance
 
 training:  # passed straight to Seq2SeqTrainingArguments (add any HF arg here)
-  learning_rate: 1.0e-5
+  learning_rate: 5.0e-6    # lower LR for continue from already-finetuned final
   per_device_train_batch_size: 8
   per_device_eval_batch_size: 8
   gradient_accumulation_steps: 4   # effective train batch = 8 * 4 = 32
-  warmup_steps: 500
+  warmup_steps: 200
   num_train_epochs: 3
   eval_steps: 1000
   save_steps: 1000
   logging_steps: 50
   dataloader_num_workers: 16
   report_to: wandb
-  run_name: whisper-salt-kin-dav-wer-cl
+  run_name: whisper-salt-kin-dav-wer-cl-full3
   early_stopping_patience: 4   # eval rounds; x eval_steps = the paper's 4000-step patience
 
 curriculum:
-  # Rank once with Sunbird WER, then grow subsets 20→50→70→100% — no rescoring between stages
-  schedule: [0.2, 0.5, 0.7, 1.0]
-  epochs_per_stage: [1, 1, 1, 1]
+  # Curriculum-shaped continue: only the 100% stage (reuse prior WER rankings — copy .npy)
+  schedule: [1.0]
+  epochs_per_stage: [3]
   score_batch_size: 64
   score_num_workers: 16
   score_max_new_tokens: 128
