@@ -10,6 +10,12 @@ languages:
     audio_dir: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda  # manifest audio paths are relative
     lang_token_id: 50350   # 'kin' token (SALT scheme; same ID in akera checkpoints)
     oversample: 1
+  # kidawida:
+  #   train_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/train_processed.tsv
+  #   eval_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/dev_processed.tsv
+  #   audio_dir: /project/community/rmwisene/pipeline_outputs/processed/kidawida  # manifest paths are relative
+  #   lang_token_id: 50318   # 'swa' (Swahili) as proxy — closest SALT language to Kidaw'ida
+  #   oversample: 5          # counter the Kinyarwanda/Kidaw'ida data imbalance
 
 training:  # passed straight to Seq2SeqTrainingArguments (add any HF arg here)
   learning_rate: 1.0e-5
@@ -27,9 +33,9 @@ training:  # passed straight to Seq2SeqTrainingArguments (add any HF arg here)
   early_stopping_patience: 4   # eval rounds; x eval_steps = the paper's 4000-step patience
 
 # Unused unless you pass --curriculum (kept for optional later experiments)
-curriculum:
-  schedule: [0.2, 0.5, 0.7, 1.0]
-  epochs_per_stage: [1, 1, 1, 1]
-  score_batch_size: 64
-  score_num_workers: 16
-  score_max_new_tokens: 128
+# curriculum:
+#   schedule: [0.2, 0.5, 0.7, 1.0]
+#   epochs_per_stage: [1, 1, 1, 1]
+#   score_batch_size: 64
+#   score_num_workers: 16
+#   score_max_new_tokens: 128
