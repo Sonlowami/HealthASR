@@ -25,11 +25,12 @@ PROJECT_ROOT="${PROJECT_ROOT:-/project/community/rmwisene}"
 RUN_ROOT="${RUN_ROOT:-$PROJECT_ROOT/pipeline_outputs/whisper_runs/kin-only-sunbird-e10}"
 HF_HOME="${HF_HOME:-$PROJECT_ROOT/hf_cache}"
 WANDB_DIR="${WANDB_DIR:-$RUN_ROOT/wandb}"
-TMPDIR="${TMPDIR:-$RUN_ROOT/tmp}"
+# Do NOT inherit shell TMPDIR (/mnt/tmp on orchard) — always use project path
+JOB_TMPDIR="${JOB_TMPDIR:-$RUN_ROOT/tmp}"
 TORCH_HOME="${TORCH_HOME:-$PROJECT_ROOT/torch_cache}"
 XDG_CACHE_HOME="${XDG_CACHE_HOME:-$PROJECT_ROOT/xdg_cache}"
 
-mkdir -p "$RUN_ROOT" "$HF_HOME/hub" "$WANDB_DIR" "$TMPDIR" "$TORCH_HOME" "$XDG_CACHE_HOME"
+mkdir -p "$RUN_ROOT" "$HF_HOME/hub" "$WANDB_DIR" "$JOB_TMPDIR" "$TORCH_HOME" "$XDG_CACHE_HOME"
 
 # Remaining CLI args → train.py
 TRAIN_ARGS=("$@")
@@ -57,7 +58,7 @@ export TRANSFORMERS_CACHE="${HF_HOME}"
 export HF_DATASETS_CACHE="${HF_HOME}/datasets"
 export TORCH_HOME="${TORCH_HOME}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME}"
-export TMPDIR="${TMPDIR}"
+export TMPDIR="${JOB_TMPDIR}"
 export WANDB_DIR="${WANDB_DIR}"
 export WANDB_CACHE_DIR="${WANDB_DIR}/cache"
 mkdir -p "\$HUGGINGFACE_HUB_CACHE" "\$HF_DATASETS_CACHE" "\$WANDB_CACHE_DIR" "\$TMPDIR"
