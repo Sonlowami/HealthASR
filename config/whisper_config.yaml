@@ -1,5 +1,5 @@
 # Whisper fine-tuning: combined Kinyarwanda + Kidaw'ida, starting from Sunbird SALT.
-checkpoint: Sunbird/asr-whisper-large-v3-salt
+checkpoint: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-wer-cl/final
 output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-wer-cl
 
 languages:
