@@ -16,7 +16,7 @@ CONFIG="${CONFIG:-config/whisper_config.yaml}"
 SLURM_PARTITION="${SLURM_PARTITION:-general}"
 SLURM_TIME="${SLURM_TIME:-12:00:00}"
 SLURM_MEM="${SLURM_MEM:-128G}"
-SLURM_CPUS="${SLURM_CPUS:-16}"
+SLURM_CPUS="${SLURM_CPUS:-32}"   # keep >= dataloader_num_workers (24 in config)
 SLURM_GPUS="${SLURM_GPUS:-1}"
 SLURM_JOB_NAME="${SLURM_JOB_NAME:-whisper-train}"
 
