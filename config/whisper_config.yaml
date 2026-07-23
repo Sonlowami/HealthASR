@@ -1,6 +1,6 @@
-# Continue from curriculum final: one full-data stage, 3 epochs (no 20/50/70 replay).
+# Continue from curriculum final: one full-data stage, 10 epochs (no 20/50/70 replay).
 checkpoint: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-wer-cl/final
-output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-wer-cl-full3
+output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-wer-cl-full10
 
 languages:
   kinyarwanda:
@@ -23,19 +23,19 @@ training:  # passed straight to Seq2SeqTrainingArguments (add any HF arg here)
   per_device_eval_batch_size: 8
   gradient_accumulation_steps: 4   # effective train batch = 8 * 4 = 32
   warmup_steps: 200
-  num_train_epochs: 3
+  num_train_epochs: 10
   eval_steps: 1000
   save_steps: 1000
   logging_steps: 50
   dataloader_num_workers: 16
   report_to: wandb
-  run_name: whisper-salt-kin-dav-wer-cl-full3
+  run_name: whisper-salt-kin-dav-wer-cl-full10
   early_stopping_patience: 4   # eval rounds; x eval_steps = the paper's 4000-step patience
 
 curriculum:
   # Curriculum-shaped continue: only the 100% stage (reuse prior WER rankings — copy .npy)
   schedule: [1.0]
-  epochs_per_stage: [3]
+  epochs_per_stage: [10]
   score_batch_size: 64
   score_num_workers: 16
   score_max_new_tokens: 128
