@@ -19,14 +19,14 @@ languages:
 
 training:  # passed straight to Seq2SeqTrainingArguments (add any HF arg here)
   learning_rate: 1.0e-5
-  per_device_train_batch_size: 16
-  per_device_eval_batch_size: 16
-  gradient_accumulation_steps: 2   # effective train batch = 16 * 2 = 32
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4   # effective train batch = 8 * 4 = 32 (batch 16 OOMs on H100)
   warmup_steps: 500
   num_train_epochs: 10
   eval_steps: 1000
   save_steps: 1000
-  logging_steps: 50
+  logging_steps: 200
   dataloader_num_workers: 24
   report_to: wandb
   run_name: whisper-salt-kin-only-e10
