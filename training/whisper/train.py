@@ -184,6 +184,23 @@ def make_collator(processor):
     return collate
 
 
+def report_per_language_wer(model, processor, langs: dict, cfg: dict) -> None:
+    """Decode each language's eval set and print corpus WER (same as --eval_only)."""
+    cc = cfg.get("curriculum") or {}
+    score_bs = int(cc.get("score_batch_size", 32))
+    num_workers = int(cc.get("score_num_workers", 16))
+    max_new = int(cc.get("score_max_new_tokens", 128))
+    print("\n=== Final per-language corpus WER (dev) ===", flush=True)
+    for name, lang in langs.items():
+        print(f"Evaluating {name} ({len(lang['eval'])} clips)...", flush=True)
+        _, corpus_wer = curriculum.score_wer(
+            model, processor, lang["eval"], lang["token_id"],
+            batch_size=score_bs, num_workers=num_workers, max_new_tokens=max_new,
+        )
+        print(f"{name}: corpus WER {corpus_wer:.4f} over {len(lang['eval'])} samples", flush=True)
+    print("=== End WER report ===\n", flush=True)
+
+
 def build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir,
                   wer_samples=None, **overrides):
     tc = dict(cfg["training"])
@@ -245,14 +262,7 @@ def main():
     score_bs = cfg.get("curriculum", {}).get("score_batch_size", 32)
 
     if args.eval_only:
-        for name, lang in langs.items():
-            _, corpus_wer = curriculum.score_wer(
-                model, processor, lang["eval"], lang["token_id"],
-                batch_size=score_bs,
-                num_workers=int(cfg.get("curriculum", {}).get("score_num_workers", 16)),
-                max_new_tokens=int(cfg.get("curriculum", {}).get("score_max_new_tokens", 128)),
-            )
-            print(f"{name}: corpus WER {corpus_wer:.4f} over {len(lang['eval'])} samples")
+        report_per_language_wer(model, processor, langs, cfg)
         return
 
     eval_ds = concatenate_datasets([l["eval"] for l in langs.values()])
@@ -313,6 +323,9 @@ def main():
     model.save_pretrained(f"{output_dir}/final")
     processor.save_pretrained(f"{output_dir}/final")
     print(f"Saved final model to {output_dir}/final")
+
+    # Always report corpus WER on every language in the config after saving final
+    report_per_language_wer(model, processor, langs, cfg)
 
 
 if __name__ == "__main__":
