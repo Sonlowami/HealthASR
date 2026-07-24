@@ -184,6 +184,27 @@ def make_collator(processor):
     return collate
 
 
+def latest_valid_checkpoint(output_dir: str) -> str | None:
+    """Newest checkpoint-* that has trainer_state.json (skip half-written TIME_LIMIT saves)."""
+    root = Path(output_dir)
+    candidates = []
+    for p in root.glob("checkpoint-*"):
+        if not p.is_dir():
+            continue
+        if not (p / "trainer_state.json").is_file():
+            print(f"Skipping incomplete checkpoint (no trainer_state.json): {p}")
+            continue
+        try:
+            step = int(p.name.split("-")[-1])
+        except ValueError:
+            continue
+        candidates.append((step, p))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])
+    return str(candidates[-1][1])
+
+
 def report_per_language_wer(model, processor, langs: dict, cfg: dict) -> None:
     """Decode each language's eval set and print corpus WER (same as --eval_only)."""
     cc = cfg.get("curriculum") or {}
@@ -308,17 +329,23 @@ def main():
                 model, processor, combine(parts, repeats), eval_ds, cfg,
                 stage_dir, wer_samples=wer_samples,
                 num_train_epochs=float(cc["epochs_per_stage"][stage - 1]))
-            resume = args.resume and any(Path(stage_dir).glob("checkpoint-*"))
-            trainer.train(resume_from_checkpoint=True if resume else None)
+            ckpt = latest_valid_checkpoint(stage_dir) if args.resume else None
+            if args.resume and ckpt:
+                print(f"Resuming from {ckpt}")
+            elif args.resume:
+                print(f"--resume set but no valid checkpoint under {stage_dir}; starting fresh.")
+            trainer.train(resume_from_checkpoint=ckpt)
     else:
         train_ds = combine([l["train"] for l in langs.values()],
                            [l["oversample"] for l in langs.values()])
         trainer = build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir,
                                 wer_samples=wer_samples)
-        resume = args.resume and any(Path(output_dir).glob("checkpoint-*"))
-        if args.resume and not resume:
-            print(f"--resume set but no checkpoint-* found under {output_dir}; starting fresh.")
-        trainer.train(resume_from_checkpoint=True if resume else None)
+        ckpt = latest_valid_checkpoint(output_dir) if args.resume else None
+        if args.resume and ckpt:
+            print(f"Resuming from {ckpt}")
+        elif args.resume:
+            print(f"--resume set but no valid checkpoint under {output_dir}; starting fresh.")
+        trainer.train(resume_from_checkpoint=ckpt)
 
     model.save_pretrained(f"{output_dir}/final")
     processor.save_pretrained(f"{output_dir}/final")
