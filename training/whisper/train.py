@@ -128,6 +128,37 @@ def pick_wer_samples(langs: dict, n_per_lang: int = 2) -> list[dict]:
     return samples
 
 
+class EpochProgressCallback(TrainerCallback):
+    """Print clear epoch markers in the log (HF's float epoch is easy to miss)."""
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        total = args.num_train_epochs
+        print(f"\n=== Training start: target {total:g} epoch(s) "
+              f"(max_steps={state.max_steps}) ===\n", flush=True)
+
+    def on_epoch_begin(self, args, state, control, **kwargs):
+        # state.epoch is the epoch index about to run (0-based float at boundaries)
+        cur = int(state.epoch) + 1
+        total = int(args.num_train_epochs)
+        print(f"\n=== Epoch {cur}/{total} starting "
+              f"(global_step={state.global_step}) ===\n", flush=True)
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        cur = int(state.epoch)
+        total = int(args.num_train_epochs)
+        print(f"\n=== Epoch {cur}/{total} finished "
+              f"(global_step={state.global_step}) ===\n", flush=True)
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return
+        ep = logs.get("epoch", state.epoch)
+        step = state.global_step
+        total_steps = state.max_steps
+        print(f"[progress] step {step}/{total_steps} | epoch {ep:.4f}/{args.num_train_epochs:g}",
+              flush=True)
+
+
 def make_collator(processor):
     """Batch raw rows into (input_features, labels); labels get the per-row language token."""
     tok = processor.tokenizer
@@ -156,21 +187,25 @@ def make_collator(processor):
 def build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir,
                   wer_samples=None, **overrides):
     tc = dict(cfg["training"])
-    patience = tc.pop("early_stopping_patience", 4)
+    # null / 0 / missing → no early stopping (run full num_train_epochs)
+    patience = tc.pop("early_stopping_patience", None)
     log_every = int(tc.get("logging_steps", 50))
+    use_early_stop = patience is not None and int(patience) > 0
     args = Seq2SeqTrainingArguments(
         output_dir=output_dir,
         bf16=True,
         eval_strategy="steps",
         save_strategy="steps",
-        load_best_model_at_end=True,
+        load_best_model_at_end=use_early_stop,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         save_total_limit=2,
         remove_unused_columns=False,  # collator needs the raw audio/text columns
         **{**tc, **overrides},
     )
-    callbacks = [EarlyStoppingCallback(early_stopping_patience=patience)]
+    callbacks = [EpochProgressCallback()]
+    if use_early_stop:
+        callbacks.append(EarlyStoppingCallback(early_stopping_patience=int(patience)))
     if wer_samples:
         callbacks.append(WerSampleCallback(processor, wer_samples, every_n_steps=log_every))
     return Seq2SeqTrainer(

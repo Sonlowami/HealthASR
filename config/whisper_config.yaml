@@ -30,7 +30,8 @@ training:  # passed straight to Seq2SeqTrainingArguments (add any HF arg here)
   dataloader_num_workers: 24
   report_to: wandb
   run_name: whisper-salt-kin-only-e10
-  early_stopping_patience: 4   # eval rounds; x eval_steps = the paper's 4000-step patience
+  # early_stopping_patience: 4   # disabled — run all num_train_epochs
+  early_stopping_patience: null
 
 # Unused unless you pass --curriculum (kept for optional later experiments)
 # curriculum:
