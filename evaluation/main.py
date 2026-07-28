@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	print(f"Added {PROJECT_ROOT} to sys.path")
 
 import utils.model_utils as model_utils
-from .evaluation import ASREvaluator  # the class from the previous turn
+from evaluation import ASREvaluator  # the class from the previous turn
 
 try:
     from thop import profile as thop_profile
