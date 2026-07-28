@@ -32,6 +32,15 @@ def save_json_file(data: dict, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def clean_references_hypotheses(references: list[str], hypotheses: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Clean up references and hypotheses for evaluation.
+    This can includes stripping and removing any '?' characters.
+    """
+    cleaned_references = [ref.strip().replace("?", "") for ref in references]
+    cleaned_hypotheses = [hyp.strip().replace("?", "") for hyp in hypotheses]
+    return cleaned_references, cleaned_hypotheses
+
 
 # ---------- model stats ----------
 
@@ -99,6 +108,7 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     macs = estimate_macs(model, sample_batch)
 
     references, hypotheses = run_model_inference(model, model._validation_dl, device)
+    references, hypotheses = clean_references_hypotheses(references, hypotheses)
 
     evaluator = ASREvaluator()
     evaluator.compute_wer(references, hypotheses)
