@@ -112,4 +112,16 @@ def setup_model(model, cfg: DictConfig) -> None:
     model_cfg.optim = OmegaConf.create(cfg['model']['optim'])
     model.setup_optimization(optim_config=model_cfg.optim)
 
+def setup_model_for_validation(model, cfg: DictConfig) -> None:
+	"""
+	Set up the model for evaluation (validation), without touching training data.
+	"""
+	model_cfg = model.cfg
+	model_cfg.tokenizer.dir = cfg['model']['tokenizer_dir']
+	model_cfg.tokenizer.type = cfg['model']['tokenizer_type']
+	model_cfg.validation_ds.manifest_filepath = cfg['model']['validation_ds']['manifest_filepath']
+	model_cfg.validation_ds.batch_size = cfg['model']['validation_ds'].get('batch_size', 16)
+	model_cfg.validation_ds.max_duration = cfg['model']['validation_ds'].get('max_duration', 30.0)
+
+	model.setup_validation_data(model_cfg.validation_ds)
 	
