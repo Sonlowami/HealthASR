@@ -1,9 +1,15 @@
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import torch
 from omegaconf import OmegaConf
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+	sys.path.insert(0, str(PROJECT_ROOT))
+	print(f"Added {PROJECT_ROOT} to sys.path")
 
 import utils.model_utils as model_utils
 from utils.evaluation import ASREvaluator  # the class from the previous turn
