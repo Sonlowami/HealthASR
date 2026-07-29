@@ -1,8 +1,8 @@
-# Hour-balanced bilingual FT: ~27 h Kin + ~27 h Kidaw'ida (expanded).
-# Started from kin-only final; trained 10 epochs; num_train_epochs raised to 15 to
-# --resume from checkpoint-9420 (same output_dir) for 5 more epochs.
-checkpoint: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-only-sunbird-e10/final
-output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-e10  # same dir → --resume continues here
+# +5 epochs on top of kin-dav-balanced-27h 10-epoch final (total 15 epochs of bilingual FT).
+# Do NOT --resume into the old e10 run: only checkpoint-2000 remains there (would rewind).
+# This loads e10/final weights and trains 5 more epochs with a fresh optimizer.
+checkpoint: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-e10/final
+output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-e15
 
 languages:
   kinyarwanda:
@@ -23,8 +23,8 @@ training:
   per_device_train_batch_size: 8
   per_device_eval_batch_size: 8
   gradient_accumulation_steps: 4   # effective batch = 32
-  warmup_steps: 500
-  num_train_epochs: 15   # was 10; resume from checkpoint-9420 to finish remaining epochs
+  warmup_steps: 100               # short: continuing from a trained model
+  num_train_epochs: 5
   eval_steps: 2000
   save_steps: 2000
   logging_steps: 200
@@ -32,11 +32,3 @@ training:
   report_to: wandb
   run_name: whisper-salt-kin-dav-balanced-27h-e15
   early_stopping_patience: null
-
-# Unused unless you pass --curriculum
-# curriculum:
-#   schedule: [0.2, 0.5, 0.7, 1.0]
-#   epochs_per_stage: [1, 1, 1, 1]
-#   score_batch_size: 64
-#   score_num_workers: 16
-#   score_max_new_tokens: 128
