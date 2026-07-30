@@ -139,8 +139,6 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     validation dataloader from that language's manifest, runs inference,
     and computes WER/CER (+ CES if a usable baseline is available for
     that language).
-
-    Returns: {"params": ..., "macs": ..., "languages": {lang: {wer, cer, ces, combined_error}}}
     """
     model = model_class.restore_from(model_path)
     model_utils.setup_model_for_validation(model, cfg)
@@ -150,6 +148,11 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     model.to(device)
 
     params = count_parameters(model)
+
+    language_items = list(language_codes.items())
+    _, first_lang_code = language_items[0]
+    setup_validation_for_language(model, cfg, first_lang_code)
+
     sample_batch = next(iter(model._validation_dl))
     macs = estimate_macs(model, sample_batch)
 
@@ -159,9 +162,12 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
 
     results = {"params": params, "macs": macs, "languages": {}}
 
-    for lang_name, lang_code in language_codes.items():
+    for i, (lang_name, lang_code) in enumerate(language_items):
         print(f"  -- language: {lang_name} ({lang_code}) --")
-        setup_validation_for_language(model, cfg, lang_code)
+        if i > 0:
+            # first language's dataloader is already set up above --
+            # only rebuild for languages 2+
+            setup_validation_for_language(model, cfg, lang_code)
 
         references, hypotheses = run_model_inference(model, model._validation_dl, device)
         references, hypotheses = clean_references_hypotheses(references, hypotheses)
