@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import copy
 import torch
+import torch.nn as nn
 from omegaconf import OmegaConf, open_dict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -49,23 +50,59 @@ def count_parameters(model) -> int:
     return sum(p.numel() for p in model.parameters())
 
 
+class _KwargsForwardWrapper(nn.Module):
+    """
+    thop calls the profiled module positionally (model(*inputs)), but
+    NeMo's forward() is decorated with @typecheck() and requires
+    input_signal=/input_signal_length= as keywords. This thin wrapper
+    accepts positional args from thop and forwards them as kwargs to the
+    real model.
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, input_signal, input_signal_length):
+        return self.model.forward(input_signal=input_signal, input_signal_length=input_signal_length)
+
+
+def _remove_thop_hooks(model) -> None:
+    """
+    thop normally removes its own forward hooks once profiling completes,
+    but a failed/interrupted profiling pass can leave them attached --
+    silently corrupting every later forward() call on this model (as just
+    happened: a failed profile broke real evaluation afterward). Strip
+    anything thop may have attached, unconditionally, success or failure.
+    """
+    for module in model.modules():
+        for attr in ("total_ops", "total_params"):
+            if hasattr(module, attr):
+                delattr(module, attr)
+        module._forward_hooks.clear()
+        module._forward_pre_hooks.clear()
+
+
 def estimate_macs(model, sample_batch):
     """
     Best-effort MACs estimate via thop. Returns None if thop isn't
-    installed or profiling fails against this model's forward signature.
-    CES is skipped (not computed with a missing term) when this is None.
+    installed or profiling fails for any other reason. Always strips
+    thop's hooks afterward (success or failure) so this can never leave
+    the model in a broken state for subsequent forward() calls.
     """
     if thop_profile is None:
         print("thop not installed -- skipping MACs estimation.")
         return None
+
+    wrapped = _KwargsForwardWrapper(model)
     try:
         signal, signal_len, _, _ = sample_batch
-        macs, _ = thop_profile(model, inputs=(signal, signal_len), verbose=False)
+        macs, _ = thop_profile(wrapped, inputs=(signal, signal_len), verbose=False)
         return macs
     except Exception as exc:
         print(f"MACs estimation failed: {exc}")
         return None
-
+    finally:
+        _remove_thop_hooks(model)
 
 # ---------- inference ----------
 
