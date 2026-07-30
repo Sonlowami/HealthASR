@@ -96,6 +96,8 @@ def estimate_macs(model, sample_batch):
     wrapped = _KwargsForwardWrapper(model)
     try:
         signal, signal_len, _, _ = sample_batch
+        device = next(model.parameters()).device
+        signal, signal_len = signal.to(device), signal_len.to(device)
         macs, _ = thop_profile(wrapped, inputs=(signal, signal_len), verbose=False)
         return macs
     except Exception as exc:

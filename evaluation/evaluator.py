@@ -44,7 +44,7 @@ class ASREvaluator:
         """CombinedError = 0.4 * WER + 0.6 * CER (Digital Umuganda challenge score)."""
         if self.wer is None or self.cer is None:
             raise ValueError("Call compute_wer() and compute_cer() before compute_combined_error().")
-        return 0.4 * self.wer + 0.6 * self.cer
+        return 1 - (0.4 * self.wer + 0.6 * self.cer) 
 
     def compute_ces(
         self,
