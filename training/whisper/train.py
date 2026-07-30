@@ -3,7 +3,7 @@ Fine-tune Whisper (Sunbird SALT) on combined Kinyarwanda + Kidaw'ida.
 
 Run from the repo root:
   python training/whisper/train.py --config config/whisper_config.yaml --curriculum
-      # Sunbird WER rank once → stages 20/50/70/100%
+      # WER-rank at each stage with current model → 20/50/70/100% easiest
   python training/whisper/train.py --config config/whisper_config.yaml --eval_only
   python training/whisper/train.py --config config/whisper_config.yaml --curriculum --resume
 """
@@ -294,33 +294,30 @@ def main():
         schedule = cc["schedule"]
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        # Rank once per language with Sunbird WER — never rescore between stages
-        ranked = {}
-        for name, lang in langs.items():
-            score_path = Path(output_dir) / f"wer_difficulty_{name}.npy"
-            if score_path.is_file():
-                scores = np.load(score_path).tolist()
-                print(f"Loaded Sunbird WER scores for {name} from {score_path} ({len(scores)} clips)")
-            else:
-                print(f"Sunbird WER ranking for {name} ({len(lang['train'])} clips) "
-                      f"— one pass only, ~hours for large sets...")
-                scores, corpus_wer = curriculum.score_wer(
-                    model, processor, lang["train"], lang["token_id"],
-                    batch_size=score_bs,
-                    num_workers=int(cc.get("score_num_workers", 16)),
-                    max_new_tokens=int(cc.get("score_max_new_tokens", 128)),
-                )
-                print(f"  {name}: Sunbird corpus WER {corpus_wer:.4f}")
-                np.save(score_path, np.asarray(scores, dtype=np.float32))
-                print(f"  saved {score_path}")
-            ranked[name] = sorted(range(len(scores)), key=lambda i: scores[i])  # lowest WER = easiest
-
+        # Rescore with the current model at the start of every stage (easiest-first).
+        # Per-stage .npy files let --resume skip re-scoring a stage already ranked.
         for stage, fraction in enumerate(schedule, start=1):
             print(f"\n=== Curriculum stage {stage}/{len(schedule)} (fraction={fraction}) ===")
             parts, repeats = [], []
             for name, lang in langs.items():
-                n = max(1, int(len(ranked[name]) * fraction))
-                keep = ranked[name][:n]
+                score_path = Path(output_dir) / f"wer_difficulty_{name}_stage{stage}.npy"
+                if score_path.is_file():
+                    scores = np.load(score_path).tolist()
+                    print(f"  {name}: loaded WER scores from {score_path} ({len(scores)} clips)")
+                else:
+                    print(f"  {name}: WER ranking ({len(lang['train'])} clips) with current model...")
+                    scores, corpus_wer = curriculum.score_wer(
+                        model, processor, lang["train"], lang["token_id"],
+                        batch_size=score_bs,
+                        num_workers=int(cc.get("score_num_workers", 16)),
+                        max_new_tokens=int(cc.get("score_max_new_tokens", 128)),
+                    )
+                    print(f"  {name}: corpus WER {corpus_wer:.4f}")
+                    np.save(score_path, np.asarray(scores, dtype=np.float32))
+                    print(f"  {name}: saved {score_path}")
+                ranked = sorted(range(len(scores)), key=lambda i: scores[i])  # lowest WER = easiest
+                n = max(1, int(len(ranked) * fraction))
+                keep = ranked[:n]
                 print(f"  {name}: keeping {len(keep)}/{len(lang['train'])}")
                 parts.append(lang["train"].select(keep))
                 repeats.append(lang["oversample"])

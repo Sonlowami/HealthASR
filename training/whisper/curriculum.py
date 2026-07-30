@@ -1,4 +1,4 @@
-"""Curriculum helpers: Sunbird WER ranking (once) + stage selection."""
+"""Curriculum helpers: WER ranking (per stage) + easiest-fraction selection."""
 import logging
 import re
 
