@@ -119,7 +119,7 @@ def get_hypotheses(model, log_probs_or_encoded, encoded_len):
     if isinstance(model, EncDecRNNTModel):
         # RNNT: log_probs_or_encoded is actually `encoded` (encoder output),
         # not log_probs -- decode via the joint network / RNNT decoding.
-        best_hyp, _ = model.decoding.rnnt_decoder_predictions_tensor(
+        best_hyp = model.decoding.rnnt_decoder_predictions_tensor(
             encoder_output=log_probs_or_encoded,
             encoded_lengths=encoded_len,
             return_hypotheses=True,
