@@ -152,8 +152,8 @@ def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str]
             signal, signal_len, tokens, token_len = batch
             signal, signal_len = signal.to(device), signal_len.to(device)
 
-            log_probs, encoded_len, _ = run_model_forward(model, signal, signal_len)
-            hyps = get_hypotheses(model, log_probs, encoded_len)
+            output, output_len = run_model_forward(model, signal, signal_len)
+            hyps = get_hypotheses(model, output, output_len)
 
             tokens_np, token_len_np = tokens.cpu().numpy(), token_len.cpu().numpy()
             for t, t_len, hyp in zip(tokens_np, token_len_np, hyps):
