@@ -108,42 +108,6 @@ def estimate_macs(model, sample_batch):
 
 # ---------- inference ----------
 
-from nemo.collections.asr.models import EncDecCTCModel, EncDecRNNTModel
-
-
-def get_hypotheses(model, log_probs_or_encoded, encoded_len):
-    """
-    Normalize CTC vs RNNT decoding into a single call. CTC's forward()
-    already returns log_probs directly decodable via ctc_decoder_predictions_tensor.
-    RNNT's forward() only returns encoder output -- decoding to text requires
-    a separate call through the model's RNNT decoding module.
-    """
-    if isinstance(model, EncDecRNNTModel):
-        # RNNT: log_probs_or_encoded is actually `encoded` (encoder output),
-        # not log_probs -- decode via the joint network / RNNT decoding.
-        best_hyp = model.decoding.rnnt_decoder_predictions_tensor(
-            encoder_output=log_probs_or_encoded,
-            encoded_lengths=encoded_len,
-            return_hypotheses=True,
-        )
-        return best_hyp
-    else:
-        return model.decoding.ctc_decoder_predictions_tensor(log_probs_or_encoded, encoded_len)
-
-
-def run_model_forward(model, signal, signal_len):
-    """
-    Dispatch forward() correctly for CTC (3-tuple) vs RNNT (2-tuple)
-    return signatures, and return a normalized (encoder_output, encoded_len)
-    pair regardless of model type.
-    """
-    if isinstance(model, EncDecRNNTModel):
-        encoded, encoded_len = model.forward(input_signal=signal, input_signal_length=signal_len)
-        return encoded, encoded_len
-    else:
-        log_probs, encoded_len, _ = model.forward(input_signal=signal, input_signal_length=signal_len)
-        return log_probs, encoded_len
-
 def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str]]:
     """Runs the model over its validation dataloader; returns (references, hypotheses)."""
     model.to(device)
@@ -154,8 +118,8 @@ def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str]
             signal, signal_len, tokens, token_len = batch
             signal, signal_len = signal.to(device), signal_len.to(device)
 
-            output, output_len = run_model_forward(model, signal, signal_len)
-            hyps = get_hypotheses(model, output, output_len)
+            output, output_len = model_utils.run_model_forward(model, signal, signal_len)
+            hyps = model_utils.get_hypotheses(model, output, output_len)
 
             tokens_np, token_len_np = tokens.cpu().numpy(), token_len.cpu().numpy()
             for t, t_len, hyp in zip(tokens_np, token_len_np, hyps):

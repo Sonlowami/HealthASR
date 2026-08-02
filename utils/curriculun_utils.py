@@ -7,6 +7,7 @@ from nemo.collections.asr.data.audio_to_text_dataset import get_audio_to_text_bp
 from tqdm import tqdm
 import re
 from pathlib import Path
+from model_utils import run_model_forward, get_hypotheses
 try:
     import editdistance
 except ImportError:
@@ -89,8 +90,8 @@ def score_manifest(model, trainer, manifest_path: str, batch_size: int = 16) -> 
             signal, signal_len, _, _ = batch
             signal, signal_len = signal.to(device), signal_len.to(device)
 
-            log_probs, encoded_len, _ = model.forward(input_signal=signal, input_signal_length=signal_len)
-            hypotheses = model.decoding.ctc_decoder_predictions_tensor(log_probs, encoded_len)
+            output, output_len = run_model_forward(model, signal, signal_len)
+            hypotheses = get_hypotheses(model, output, output_len)
 
             for i in range(signal.shape[0]):
                 ref_text = manifest_rows[row_idx]["text"]

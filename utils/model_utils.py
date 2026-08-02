@@ -8,6 +8,7 @@ import sys
 from importlib import import_module
 from omegaconf import DictConfig, OmegaConf, open_dict
 import lightning.pytorch as pl
+from nemo.collections.asr.models import EncDecRNNTModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -118,4 +119,38 @@ def setup_model_for_validation(model, cfg: DictConfig) -> None:
 	"""
 	model_cfg = model.cfg
 	model_cfg.validation_ds.batch_size = cfg['model']['validation_ds'].get('batch_size', 16)
+
+
+def get_hypotheses(model, log_probs_or_encoded, encoded_len):
+    """
+    Normalize CTC vs RNNT decoding into a single call. CTC's forward()
+    already returns log_probs directly decodable via ctc_decoder_predictions_tensor.
+    RNNT's forward() only returns encoder output -- decoding to text requires
+    a separate call through the model's RNNT decoding module.
+    """
+    if isinstance(model, EncDecRNNTModel):
+        # RNNT: log_probs_or_encoded is actually `encoded` (encoder output),
+        # not log_probs -- decode via the joint network / RNNT decoding.
+        best_hyp = model.decoding.rnnt_decoder_predictions_tensor(
+            encoder_output=log_probs_or_encoded,
+            encoded_lengths=encoded_len,
+            return_hypotheses=True,
+        )
+        return best_hyp
+    else:
+        return model.decoding.ctc_decoder_predictions_tensor(log_probs_or_encoded, encoded_len)
+
+
+def run_model_forward(model, signal, signal_len):
+    """
+    Dispatch forward() correctly for CTC (3-tuple) vs RNNT (2-tuple)
+    return signatures, and return a normalized (encoder_output, encoded_len)
+    pair regardless of model type.
+    """
+    if isinstance(model, EncDecRNNTModel):
+        encoded, encoded_len = model.forward(input_signal=signal, input_signal_length=signal_len)
+        return encoded, encoded_len
+    else:
+        log_probs, encoded_len, _ = model.forward(input_signal=signal, input_signal_length=signal_len)
+        return log_probs, encoded_len
 	
