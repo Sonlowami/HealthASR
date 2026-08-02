@@ -6,8 +6,15 @@ import torch
 from nemo.collections.asr.data.audio_to_text_dataset import get_audio_to_text_bpe_dataset_from_config
 from tqdm import tqdm
 import re
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+	sys.path.insert(0, str(PROJECT_ROOT))
+	print(f"Added {PROJECT_ROOT} to sys.path")
+
 from pathlib import Path
-from model_utils import run_model_forward, get_hypotheses
+from utils.model_utils import run_model_forward, get_hypotheses
 try:
     import editdistance
 except ImportError:
