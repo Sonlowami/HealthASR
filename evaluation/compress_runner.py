@@ -32,8 +32,8 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     that language).
     """
     model = model_class.restore_from(model_path)
-    model = quantize_model(model)
     model_utils.setup_model_for_validation(model, cfg)
+    model = quantize_model(model)
 
     trainer = model_utils.create_trainer(cfg)
     device = trainer.strategy.root_device if trainer.strategy else torch.device("cpu")
