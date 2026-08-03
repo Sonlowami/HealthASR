@@ -8,7 +8,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from utils.model_utils import KwargsForwardWrapper
 
-def build_calibration_dataset_from_loader(val_loader) -> nncf.Dataset:
+def build_calibration_dataset_from_loader(val_loader, device=None) -> nncf.Dataset:
     if val_loader is None:
         raise RuntimeError(
             "val_loader is None -- a validation dataloader must be set up "
@@ -17,6 +17,9 @@ def build_calibration_dataset_from_loader(val_loader) -> nncf.Dataset:
 
     def transform_fn(batch):
         signal, signal_len, _, _ = batch
+        if device is not None:
+            signal = signal.to(device)
+            signal_len = signal_len.to(device)
         return signal, signal_len
 
     return nncf.Dataset(val_loader, transform_fn)
@@ -40,10 +43,11 @@ def quantize_model(model):
 
     saved_validation_dl = model._validation_dl
     model._validation_dl = None
+    device = next(model.parameters()).device
 
     try:
         model.eval()
-        calibration_dataset = build_calibration_dataset_from_loader(saved_validation_dl)
+        calibration_dataset = build_calibration_dataset_from_loader(saved_validation_dl, device=device)
 
         wrapped = KwargsForwardWrapper(model)
         quantized_wrapper = nncf.quantize(wrapped, calibration_dataset)
