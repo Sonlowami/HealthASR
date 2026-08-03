@@ -66,9 +66,10 @@ def convert_to_nemo_manifest(input_path, output_path, audio_base_path):
 
     for i, entry in enumerate(tqdm(data, total=len(data))):
         try:
-            audio_file = entry['audio_path']
+            audio_file = entry.get("audio_path") or entry.get("path")
+            if audio_file is None:
+                raise KeyError("audio_path/path")
             audio_path = os.path.join(audio_base_path, audio_file)
-
             if audio_path in seen_paths:
                 skipped_duplicates += 1
                 continue
