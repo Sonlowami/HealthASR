@@ -84,12 +84,17 @@ class CurriculumAudioNemoTrainer(AudioNemoTrainer):
 
         # Check for a checkpoint from a previous (crashed/interrupted) run.
         resume_epoch = None
+        resume_ckpt_path = None
         if self.cfg.exp_manager.get("resume_if_exists", False):
-            ckpt_dir = Path(self.cfg.exp_manager.get("explicit_log_dir"))
-            resume_epoch, resume_ckpt_path = cutils.find_last_checkpoint(str(ckpt_dir / "checkpoints"))
-            if resume_epoch is not None:
-                print(f"Found checkpoint at epoch {resume_epoch} — will skip already-completed "
-                    f"curriculum stages and preload weights for the stage still in progress.")
+            explicit_log_dir = self.cfg.exp_manager.get("explicit_log_dir")
+            if explicit_log_dir:
+                ckpt_dir = Path(explicit_log_dir)
+                resume_epoch, resume_ckpt_path = cutils.find_last_checkpoint(str(ckpt_dir / "checkpoints"))
+            if resume_epoch is not None and resume_ckpt_path is not None:
+                print(
+                    f"Found checkpoint at epoch {resume_epoch} — will skip already-completed "
+                    f"curriculum stages and preload weights for the stage still in progress."
+                )
                 device = self.trainer.strategy.root_device
                 cutils.preload_weights(self.model, resume_ckpt_path, device)
 
