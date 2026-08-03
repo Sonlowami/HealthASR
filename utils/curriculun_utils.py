@@ -124,9 +124,9 @@ def write_stage_manifest(ranked_entries: list[dict], active_fraction: float, out
 
 def find_last_checkpoint(checkpoint_dir: str) -> tuple[int, str] | tuple[None, None]:
     """
-    Find the checkpoint with the highest epoch, by parsing filenames
-    (pattern: '{epoch}-{step}-{val_wer:.2f}.ckpt') — no need to load the
-    file itself just to discover how far training got.
+    Find the checkpoint with the highest epoch by parsing filenames that include
+    'epoch=<N>' (e.g. '...epoch=3-step=1234.ckpt'). No need to load the file just
+    to discover how far training got.
     Returns (epoch, path) or (None, None) if no checkpoints exist.
     """
     ckpt_dir = Path(checkpoint_dir)
