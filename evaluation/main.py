@@ -50,22 +50,6 @@ def count_parameters(model) -> int:
     return sum(p.numel() for p in model.parameters())
 
 
-class _KwargsForwardWrapper(nn.Module):
-    """
-    thop calls the profiled module positionally (model(*inputs)), but
-    NeMo's forward() is decorated with @typecheck() and requires
-    input_signal=/input_signal_length= as keywords. This thin wrapper
-    accepts positional args from thop and forwards them as kwargs to the
-    real model.
-    """
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, input_signal, input_signal_length):
-        return self.model.forward(input_signal=input_signal, input_signal_length=input_signal_length)
-
-
 def _remove_thop_hooks(model) -> None:
     """
     thop normally removes its own forward hooks once profiling completes,
@@ -93,7 +77,7 @@ def estimate_macs(model, sample_batch):
         print("thop not installed -- skipping MACs estimation.")
         return None
 
-    wrapped = _KwargsForwardWrapper(model)
+    wrapped = model_utils.KwargsForwardWrapper(model)
     try:
         signal, signal_len, _, _ = sample_batch
         device = next(model.parameters()).device

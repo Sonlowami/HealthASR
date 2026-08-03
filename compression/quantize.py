@@ -1,4 +1,12 @@
 import nncf
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from utils.model_utils import KwargsForwardWrapper
 
 def build_calibration_dataset_from_loader(val_loader) -> nncf.Dataset:
     if val_loader is None:
@@ -36,7 +44,10 @@ def quantize_model(model):
     try:
         model.eval()
         calibration_dataset = build_calibration_dataset_from_loader(saved_validation_dl)
-        quantized_model = nncf.quantize(model, calibration_dataset)
+
+        wrapped = KwargsForwardWrapper(model)
+        quantized_wrapper = nncf.quantize(wrapped, calibration_dataset)
+        quantized_model = quantized_wrapper.model 
     finally:
         model._validation_dl = saved_validation_dl
         for attr, value in instance_overrides.items():

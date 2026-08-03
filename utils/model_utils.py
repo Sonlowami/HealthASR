@@ -3,6 +3,7 @@ from xml.parsers.expat import model
 from dotenv import load_dotenv
 from huggingface_hub import login as hf_login
 import os
+import torch.nn as nn
 from pathlib import Path
 import sys
 from importlib import import_module
@@ -13,7 +14,6 @@ from nemo.collections.asr.models import EncDecRNNTModel
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
 	sys.path.insert(0, str(PROJECT_ROOT))
-	print(f"Added {PROJECT_ROOT} to sys.path")
 
 def authenticate_huggingface() -> None:
 		"""
@@ -152,4 +152,20 @@ def run_model_forward(model, signal, signal_len):
     else:
         log_probs, encoded_len, _ = model.forward(input_signal=signal, input_signal_length=signal_len)
         return log_probs, encoded_len
+
+
+class KwargsForwardWrapper(nn.Module):
+    """
+    thop calls the profiled module positionally (model(*inputs)), but
+    NeMo's forward() is decorated with @typecheck() and requires
+    input_signal=/input_signal_length= as keywords. This thin wrapper
+    accepts positional args from thop and forwards them as kwargs to the
+    real model.
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, input_signal, input_signal_length):
+        return self.model.forward(input_signal=input_signal, input_signal_length=input_signal_length)
 	
