@@ -9,7 +9,7 @@ def load_existing_sentences(output_path: str) -> list[str]:
     a list of the sentences in order.
     """
     if not os.path.isfile(output_path):
-        return [], set()
+        return []
 
     with open(output_path, 'r', encoding='utf-8') as f:
         lines = [line.rstrip('\n') for line in f if line.strip()]
