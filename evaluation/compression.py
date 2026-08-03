@@ -1,7 +1,6 @@
 import sys
 from pathlib import Path
 from omegaconf import open_dict, OmegaConf
-import utils.model_utils as model_utils
 import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,6 +18,7 @@ from evaluation.main import (
     clean_references_hypotheses,
 )
 from evaluation import ASREvaluator
+import utils.model_utils as model_utils
 import argparse
 
 
