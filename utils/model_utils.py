@@ -87,7 +87,7 @@ def setup_model(model, cfg: DictConfig) -> None:
     model_cfg.tokenizer.dir = cfg['model']['tokenizer_dir']
     model_cfg.tokenizer.type = cfg['model']['tokenizer_type']
     model_cfg.train_ds.manifest_filepath = cfg['model']['train_ds']['manifest_filepath']
-    model_cfg.validation_ds.manifest_filepath = cfg['model']['validation_ds']['dav_manifest_filepath']
+model_cfg.validation_ds.manifest_filepath = cfg['model']['validation_ds'].get('dav_manifest_filepath', cfg['model']['validation_ds']['manifest_filepath'])
     model_cfg.decoding.strategy = cfg['model']['decoding']['strategy']
 	
 
