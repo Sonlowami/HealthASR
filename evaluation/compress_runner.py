@@ -33,7 +33,6 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     """
     model = model_class.restore_from(model_path)
     model_utils.setup_model_for_validation(model, cfg)
-    model = quantize_model(model)
 
     trainer = model_utils.create_trainer(cfg)
     device = trainer.strategy.root_device if trainer.strategy else torch.device("cpu")
@@ -44,6 +43,7 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     language_items = list(language_codes.items())
     _, first_lang_code = language_items[0]
     setup_validation_for_language(model, cfg, first_lang_code)
+    model = quantize_model(model)
 
     sample_batch = next(iter(model._validation_dl))
     macs = estimate_macs(model, sample_batch)
