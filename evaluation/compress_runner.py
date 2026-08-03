@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from omegaconf import open_dict, OmegaConf
+from omegaconf import OmegaConf
 import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -116,3 +116,6 @@ def main():
     output_path = str(Path(args.output_dir) / "results.json")
     save_json_file(results, output_path)
     print(f"\nSaved results to {output_path}")
+
+if __name__ == "__main__":
+    main()
