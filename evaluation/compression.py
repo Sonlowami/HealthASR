@@ -1,13 +1,12 @@
 import sys
 from pathlib import Path
-from omegaconf import open_dict, OmegaConf
+from omegaconf import OmegaConf
 import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
     print(f"Added {PROJECT_ROOT} to sys.path")
 
-from compression.quantize import quantize_model
 from evaluation.main import (
     load_json_file,
     save_json_file,
@@ -20,6 +19,7 @@ from evaluation.main import (
 )
 from evaluation import ASREvaluator
 import utils.model_utils as model_utils
+from compression.quantize import quantize_model
 import argparse
 
 
