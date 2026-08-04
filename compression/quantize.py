@@ -48,13 +48,24 @@ def quantize_model(model):
     try:
         model.eval()
         calibration_dataset = build_calibration_dataset_from_loader(saved_validation_dl, device=device)
+        # Set maximum length so nncf does not retrigger statistics computation when it meets a longer sequence
+        MAX_SEQ_LENGTH = 10000
+        model.encoder.update_max_seq_length(seq_length=MAX_SEQ_LENGTH, device=device)
+
 
         wrapped = KwargsForwardWrapper(model)
-        quantized_wrapper = nncf.quantize(wrapped, calibration_dataset)
-        quantized_model = quantized_wrapper.model 
+        # Ignore positional encoding layers during quantization.
+        # Why? Because nncf + nemo is quite a headache.
+        # nncf expects a tensor with dim >= 2. It tried to compute statistics for 1-d tensors from pe, triggering IndexOutOfRangeError.
+        quantized_wrapper = nncf.quantize(
+            wrapped,
+            calibration_dataset,
+            ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*"]))
+        quantized_model = quantized_wrapper.model
+        model = quantized_model
     finally:
         model._validation_dl = saved_validation_dl
         for attr, value in instance_overrides.items():
             model.__dict__[attr] = value
 
-    return quantized_model
+    return model
