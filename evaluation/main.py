@@ -19,11 +19,6 @@ from data_cleaning.src.config import LANGUAGES
 from evaluation import ASREvaluator
 from compression.quantize import quantize_model
 
-try:
-    from thop import profile as thop_profile
-except ImportError:
-    thop_profile = None
-
 
 # ---------- I/O (separated for easy swap-in of existing project utilities) ----------
 
@@ -45,53 +40,6 @@ def clean_references_hypotheses(references: list[str], hypotheses: list[str]) ->
     cleaned_references = [ref.strip().replace("?", "") for ref in references]
     cleaned_hypotheses = [hyp.strip().replace("?", "") for hyp in hypotheses]
     return cleaned_references, cleaned_hypotheses
-
-
-# ---------- model stats ----------
-
-def count_parameters(model) -> int:
-    return sum(p.numel() for p in model.parameters())
-
-
-def _remove_thop_hooks(model) -> None:
-    """
-    thop normally removes its own forward hooks once profiling completes,
-    but a failed/interrupted profiling pass can leave them attached --
-    silently corrupting every later forward() call on this model (as just
-    happened: a failed profile broke real evaluation afterward). Strip
-    anything thop may have attached, unconditionally, success or failure.
-    """
-    for module in model.modules():
-        for attr in ("total_ops", "total_params"):
-            if hasattr(module, attr):
-                delattr(module, attr)
-        module._forward_hooks.clear()
-        module._forward_pre_hooks.clear()
-
-
-def estimate_macs(model, sample_batch):
-    """
-    Best-effort MACs estimate via thop. Returns None if thop isn't
-    installed or profiling fails for any other reason. Always strips
-    thop's hooks afterward (success or failure) so this can never leave
-    the model in a broken state for subsequent forward() calls.
-    """
-    if thop_profile is None:
-        print("thop not installed -- skipping MACs estimation.")
-        return None
-
-    wrapped = model_utils.KwargsForwardWrapper(model)
-    try:
-        signal, signal_len, _, _ = sample_batch
-        device = next(model.parameters()).device
-        signal, signal_len = signal.to(device), signal_len.to(device)
-        macs, _ = thop_profile(wrapped, inputs=(signal, signal_len), verbose=False)
-        return macs
-    except Exception as exc:
-        print(f"MACs estimation failed: {exc}")
-        return None
-    finally:
-        _remove_thop_hooks(model)
 
 # ---------- inference ----------
 
@@ -231,6 +179,7 @@ def main():
     parser.add_argument("--baseline_file", default=None,
                          help="Optional JSON: {model_filename: {params, macs, languages: {lang: {cer, wer, combined_error}}}}.")
     parser.add_argument("--output_dir", required=True, help="Directory to save results.json into.")
+    parser.add_argument("--quantize", action="store_true", help="Whether to quantize the model before evaluation.")
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
@@ -243,7 +192,14 @@ def main():
         model_filename = Path(model_path).name
         print(f"\n=== Evaluating {model_filename} ===")
         baseline_entry = baseline_data.get(model_filename) if args.baseline_file else None
-        results[model_filename] = evaluate_model(model_path, model_class, cfg, baseline_entry, language_codes)
+        results[model_filename] = evaluate_model(
+            model_path,
+            model_class,
+            cfg,
+            baseline_entry,
+            language_codes,
+            quantize=args.quantize
+            )
 
     output_path = str(Path(args.output_dir) / "results.json")
     save_json_file(results, output_path)
