@@ -42,6 +42,12 @@ def quantize_model(model):
             instance_overrides[attr] = model.__dict__.pop(attr)
 
     saved_validation_dl = model._validation_dl
+    sample_batch = next(iter(saved_validation_dl))
+    signal, signal_len, _, _ = sample_batch
+    device = next(model.parameters()).device
+    signal, signal_len = signal.to(device), signal_len.to(device)
+    example_input = (signal, signal_len)
+
     model._validation_dl = None
     device = next(model.parameters()).device
 
@@ -62,7 +68,7 @@ def quantize_model(model):
             calibration_dataset,
             ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*"]))
         quantized_model = quantized_wrapper.model
-        model = nncf.strip(quantized_model)
+        model = nncf.strip(quantized_model, example_input=example_input)
 
     finally:
         model._validation_dl = saved_validation_dl
