@@ -71,7 +71,7 @@ def quantize_model(model):
         quantized_model = nncf.strip(
             quantized_wrapper,
             example_input=example_input,
-            strip_format=nncf.torch.StripFormat.DQ
+            strip_format=nncf.torch.strip.StripFormat.DQ
             )
         model = quantized_model.model
     except Exception as e:
