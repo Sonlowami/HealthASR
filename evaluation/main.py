@@ -123,7 +123,9 @@ def evaluate_model(
 
     with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
         baseline_size = model_utils.model_size_on_disk_bytes(model, tmp.name)
-
+    language_items = list(language_codes.items())
+    _, first_lang_code = language_items[0]
+    setup_validation_for_language(model, cfg, first_lang_code)
     if quantize:
         model = nncf.strip(quantize_model(model))  # strip so size reflects real reduced-precision storage
         setup_validation_for_language(model, cfg, next(iter(language_codes.values())))
@@ -145,7 +147,8 @@ def evaluate_model(
     baseline_languages = (baseline_entry or {}).get("languages", {})
     for i, (lang_name, lang_code) in enumerate(language_items):
         print(f" -- language: {lang_name} ({lang_code}) --")
-        setup_validation_for_language(model, cfg, lang_code)
+        if i > 0:
+            setup_validation_for_language(model, cfg, lang_code)
 
         references, hypotheses = run_model_inference(model, model._validation_dl, device)
         references, hypotheses = clean_references_hypotheses(references, hypotheses)
