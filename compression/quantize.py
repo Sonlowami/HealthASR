@@ -1,4 +1,5 @@
 import nncf
+from nncf.torch.strip import StripFormat
 import sys
 from pathlib import Path
 
@@ -71,7 +72,7 @@ def quantize_model(model):
         quantized_model = nncf.strip(
             quantized_wrapper,
             example_input=example_input,
-            strip_format=nncf.torch.strip.StripFormat.DQ
+            strip_format=StripFormat.DQ
             )
         model = quantized_model.model
     except Exception as e:
