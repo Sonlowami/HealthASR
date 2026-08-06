@@ -66,8 +66,13 @@ def quantize_model(model):
         quantized_wrapper = nncf.quantize(
             wrapped,
             calibration_dataset,
-            ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*"]))
-        quantized_model = nncf.strip(quantized_wrapper, example_input=example_input)
+            ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*"]),
+            )
+        quantized_model = nncf.strip(
+            quantized_wrapper,
+            example_input=example_input,
+            strip_format=nncf.torch.StripFormat.DQ
+            )
         model = quantized_model.model
     except Exception as e:
         print(f"Quantization failed: {e}")
