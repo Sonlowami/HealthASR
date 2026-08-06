@@ -67,7 +67,7 @@ def quantize_model(model):
         quantized_wrapper = nncf.quantize(
             wrapped,
             calibration_dataset,
-            ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*"]),
+            ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*", ".*featurizer.*"]),
             )
         quantized_model = nncf.strip(
             quantized_wrapper,
