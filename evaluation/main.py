@@ -6,6 +6,8 @@ import copy
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf, open_dict
+import tempfile
+import nncf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -14,7 +16,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import utils.model_utils as model_utils
 from data_cleaning.src.config import LANGUAGES
-from evaluation import ASREvaluator  # the class from the previous turn
+from evaluation import ASREvaluator
+from compression.quantize import quantize_model
 
 try:
     from thop import profile as thop_profile
@@ -155,14 +158,14 @@ def setup_validation_for_language(model, cfg, language_code: str) -> None:
         lang_ds_cfg.manifest_filepath = manifest_path
     model.setup_validation_data(lang_ds_cfg)
 
-def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | None, language_codes: dict[str, str]) -> dict:
-    """
-    Loads one model, computes params/MACs once (model-level, language-
-    independent), then for each requested language: rebuilds the
-    validation dataloader from that language's manifest, runs inference,
-    and computes WER/CER (+ CES if a usable baseline is available for
-    that language).
-    """
+def evaluate_model(
+        model_path: str,
+        model_class,
+        cfg,
+        baseline_entry: dict | None,
+        language_codes: dict[str, str],
+        quantize: bool = False
+        ) -> dict:
     model = model_class.restore_from(model_path)
     model_utils.setup_model_for_validation(model, cfg)
 
@@ -170,23 +173,30 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     device = trainer.strategy.root_device if trainer.strategy else torch.device("cpu")
     model.to(device)
 
-    params = count_parameters(model)
+    with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
+        baseline_size = model_utils.model_size_on_disk_bytes(model, tmp.name)
 
+    if quantize:
+        model = nncf.strip(quantize_model(model))  # strip so size reflects real reduced-precision storage
+        setup_validation_for_language(model, cfg, next(iter(language_codes.values())))
+    # (a future prune_model(model) step, if/when added, would slot in right here --
+    #  size is measured AFTER whatever compression steps ran, on the same model object)
+
+    with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
+        compressed_size = model_utils.model_size_on_disk_bytes(model, tmp.name)
+
+    print(f" Baseline size: {baseline_size / 1e6:.1f} MB, compressed size: {compressed_size / 1e6:.1f} MB "
+          f"({100 * (1 - compressed_size / baseline_size):.1f}% reduction)")
+
+    results = {
+        "baseline_size(MB)": baseline_size / 1e6,
+        "compressed_size(MB)": compressed_size / 1e6,
+        "languages": {}
+        }
     language_items = list(language_codes.items())
-    _, first_lang_code = language_items[0]
-    setup_validation_for_language(model, cfg, first_lang_code)
-
-    sample_batch = next(iter(model._validation_dl))
-    macs = estimate_macs(model, sample_batch)
-
     baseline_languages = (baseline_entry or {}).get("languages", {})
-    baseline_params = (baseline_entry or {}).get("params")
-    baseline_macs = (baseline_entry or {}).get("macs")
-
-    results = {"params": params, "macs": macs, "languages": {}}
-
     for i, (lang_name, lang_code) in enumerate(language_items):
-        print(f"  -- language: {lang_name} ({lang_code}) --")
+        print(f" -- language: {lang_name} ({lang_code}) --")
         if i > 0:
             # first language's dataloader is already set up above --
             # only rebuild for languages 2+
@@ -200,21 +210,14 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
         evaluator.compute_cer(references, hypotheses)
 
         lang_baseline = baseline_languages.get(lang_name) or baseline_languages.get(lang_code)
-        if lang_baseline is not None and baseline_params is not None and baseline_macs is not None and macs is not None:
-            evaluator.compute_ces(
-                params_baseline=baseline_params,
-                params_pruned=params,
-                macs_baseline=baseline_macs,
-                macs_pruned=macs,
-                cer_baseline=lang_baseline["cer"],
-            )
+        if lang_baseline is not None and "baseline_size(MB)" in baseline_entry:
+            evaluator.compute_ces(baseline_entry["baseline_size(MB)"], compressed_size, cer_baseline=lang_baseline["cer"])
         else:
-            print(f"  Missing baseline (params/macs/cer) for language '{lang_name}' -- skipping CES.")
+            print(f"  Missing baseline size/cer for '{lang_name}' -- skipping CES.")
 
         results["languages"][lang_name] = evaluator.__to_dict__()
 
     return results
-
 # ---------- entry point ----------
 
 def main():

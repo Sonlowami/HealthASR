@@ -44,29 +44,23 @@ class ASREvaluator:
         """CombinedError = 0.4 * WER + 0.6 * CER (Digital Umuganda challenge score)."""
         if self.wer is None or self.cer is None:
             raise ValueError("Call compute_wer() and compute_cer() before compute_combined_error().")
-        return 1 - (0.4 * self.wer + 0.6 * self.cer) 
-
-    def compute_ces(
-        self,
-        params_baseline: float,
-        params_pruned: float,
-        macs_baseline: float,
-        macs_pruned: float,
-        cer_baseline: float,
-    ) -> float:
+        return 1 - (0.4 * self.wer + 0.6 * self.cer)
+    
+    def compute_ces(self, size_baseline_bytes: int, size_pruned_bytes: int, cer_baseline: float) -> float:
         """
-        Compression Efficiency Score: Euclidean distance from the ideal
-        point (100% resource saving, 100% CER retention). Lower is better.
+        CES: resource saving (X) is on-disk model size reduction (bytes),
+        used identically for every compression technique -- pruning,
+        quantization, or any combination. This is the single, canonical
+        definition; there is no separate params/MACs-based variant, so CES
+        values remain comparable across techniques regardless of how each
+        one achieves its size reduction.
         Uses self.cer (set via compute_cer()) as CER_pruned.
         """
         if self.cer is None:
-            raise ValueError("Call compute_cer() before compute_ces() — it's used as CER_pruned.")
+            raise ValueError("Call compute_cer() before compute_ces() -- it's used as CER_pruned.")
 
-        param_reduction = (params_baseline - params_pruned) / params_baseline
-        macs_reduction = (macs_baseline - macs_pruned) / macs_baseline
-        x = 0.5 * (param_reduction + macs_reduction)  # resource saving
-
-        y = max(0.0, 1 - (self.cer - cer_baseline) / cer_baseline)  # CER retention
+        x = (size_baseline_bytes - size_pruned_bytes) / size_baseline_bytes
+        y = max(0.0, 1 - (self.cer - cer_baseline) / cer_baseline)
 
         self.ces = math.sqrt((1 - x) ** 2 + (1 - y) ** 2)
         return self.ces

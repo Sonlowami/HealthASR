@@ -7,11 +7,25 @@ import sys
 from importlib import import_module
 from omegaconf import DictConfig, OmegaConf, open_dict
 import lightning.pytorch as pl
+import nncf
+import torch
 from nemo.collections.asr.models import EncDecRNNTModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
 	sys.path.insert(0, str(PROJECT_ROOT))
+
+def model_size_on_disk_bytes(model, tmp_path: str) -> int:
+    """
+    Canonical size measurement for CES's X term, used identically for
+    every compression technique (pruning, quantization, or both combined).
+    Always serializes via state_dict -- not the source .nemo file, not a
+    full re-saved .nemo -- so baseline and compressed models are always
+    compared on the exact same basis, regardless of how model_path itself
+    was packaged.
+    """
+    torch.save(model.state_dict(), tmp_path)
+    return os.path.getsize(tmp_path)
 
 def authenticate_huggingface() -> None:
 		"""
