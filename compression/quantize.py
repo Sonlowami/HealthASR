@@ -62,7 +62,8 @@ def quantize_model(model):
             calibration_dataset,
             ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*"]))
         quantized_model = quantized_wrapper.model
-        model = quantized_model
+        model = nncf.strip(quantized_model)
+
     finally:
         model._validation_dl = saved_validation_dl
         for attr, value in instance_overrides.items():

@@ -127,7 +127,7 @@ def evaluate_model(
     _, first_lang_code = language_items[0]
     setup_validation_for_language(model, cfg, first_lang_code)
     if quantize:
-        model = nncf.strip(quantize_model(model))  # strip so size reflects real reduced-precision storage
+        model = quantize_model(model)  # strip so size reflects real reduced-precision storage
         setup_validation_for_language(model, cfg, next(iter(language_codes.values())))
     # (a future prune_model(model) step, if/when added, would slot in right here --
     #  size is measured AFTER whatever compression steps ran, on the same model object)
