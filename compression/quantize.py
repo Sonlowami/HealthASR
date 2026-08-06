@@ -69,6 +69,9 @@ def quantize_model(model):
             ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*"]))
         quantized_model = nncf.strip(quantized_wrapper, example_input=example_input)
         model = quantized_model.model
+    except Exception as e:
+        print(f"Quantization failed: {e}")
+        raise e
 
     finally:
         model._validation_dl = saved_validation_dl
