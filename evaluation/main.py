@@ -159,7 +159,7 @@ def evaluate_model(
 
         lang_baseline = baseline_languages.get(lang_name) or baseline_languages.get(lang_code)
         if lang_baseline is not None and "baseline_size(MB)" in baseline_entry:
-            evaluator.compute_ces(baseline_entry["baseline_size(MB)"], compressed_size, cer_baseline=lang_baseline["cer"])
+            evaluator.compute_ces(baseline_entry["baseline_size(MB)"] * 1e6, compressed_size, cer_baseline=lang_baseline["cer"])
         else:
             print(f"  Missing baseline size/cer for '{lang_name}' -- skipping CES.")
 
