@@ -145,10 +145,7 @@ def evaluate_model(
     baseline_languages = (baseline_entry or {}).get("languages", {})
     for i, (lang_name, lang_code) in enumerate(language_items):
         print(f" -- language: {lang_name} ({lang_code}) --")
-        if i > 0:
-            # first language's dataloader is already set up above --
-            # only rebuild for languages 2+
-            setup_validation_for_language(model, cfg, lang_code)
+        setup_validation_for_language(model, cfg, lang_code)
 
         references, hypotheses = run_model_inference(model, model._validation_dl, device)
         references, hypotheses = clean_references_hypotheses(references, hypotheses)
