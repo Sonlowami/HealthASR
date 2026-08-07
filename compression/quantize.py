@@ -27,7 +27,7 @@ def build_calibration_dataset_from_loader(val_loader, device=None) -> nncf.Datas
 
     return nncf.Dataset(val_loader, transform_fn)
 
-def build_onnx_calibration_dataset(val_loader, input_names: tuple[str, str]) -> nncf.Dataset:
+def build_onnx_calibration_dataset(val_loader, input_names: tuple[str, str], device=None) -> nncf.Dataset:
     """
     input_names: the ONNX graph's actual input names (check via
     onnx.load('model.onnx').graph.input -- don't assume; NeMo's exporter
@@ -35,25 +35,55 @@ def build_onnx_calibration_dataset(val_loader, input_names: tuple[str, str]) -> 
     """
     def transform_fn(batch):
         signal, signal_len, _, _ = batch
+        if device is not None:
+            signal = signal.to(device)
+            signal_len = signal_len.to(device)
         return {
             input_names[0]: signal.numpy(),
             input_names[1]: signal_len.numpy(),
         }
     return nncf.Dataset(val_loader, transform_fn)
 
-def quantize_onnx_model(model, val_loader, input_names: tuple[str, str]):
+def quantize_onnx_model(model, val_loader, input_names: tuple[str, str], device=None):
     """
     input_names: the ONNX graph's actual input names (check via
     onnx.load('model.onnx').graph.input -- don't assume; NeMo's exporter
     may not name them exactly 'input_signal'/'input_signal_length').
     """
-    calibration_dataset = build_onnx_calibration_dataset(val_loader, input_names)
+    calibration_dataset = build_onnx_calibration_dataset(val_loader, input_names, device)
     quantized_model = nncf.quantize(
         model,
         calibration_dataset,
         #ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*", ".*featurizer.*"]),
         )
     return quantized_model
+
+def quantize_ctc_onnx(onnx_path: str, val_loader, device) -> str:
+    onnx_model = onnx.load(onnx_path)
+    input_names = tuple(inp.name for inp in onnx_model.graph.input)
+    calibration_dataset = build_onnx_calibration_dataset(val_loader, input_names, device)
+    quantized = nncf.quantize(onnx_model, calibration_dataset)
+    quantized_path = onnx_path.replace(".onnx", "_int8.onnx")
+    onnx.save(quantized, quantized_path)
+    return quantized_path
+
+
+def quantize_rnnt_onnx(encoder_path: str, decoder_joint_path: str, nemo_model, val_loader, device) -> tuple[str, str]:
+    """
+    Encoder: same calibration shape as CTC's single graph -- quantized normally.
+    decoder_joint: called autoregressively inside ONNXGreedyBatchedRNNTInfer's
+    per-step decode loop with carried hidden state -- its calibration input
+    shape isn't yet confirmed against that class's actual session.run() calls
+    (flagged as open work last turn). NOT quantized here yet -- returned
+    as-is, so results stay honest about what was actually compressed rather
+    than silently claiming full RNNT quantization.
+    """
+    quantized_encoder_path = quantize_ctc_onnx(encoder_path, val_loader, device)
+    print("  NOTE: decoder_joint graph is NOT yet quantized (calibration shape "
+          "unconfirmed for its autoregressive per-step inputs) -- only the "
+          "encoder was compressed. RNNT compression numbers currently "
+          "understate potential savings.")
+    return quantized_encoder_path, decoder_joint_path
 
 
 def quantize_model(model):

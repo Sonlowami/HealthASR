@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import utils.model_utils as model_utils
 from data_cleaning.src.config import LANGUAGES
 from evaluation import ASREvaluator
-from compression.quantize import quantize_model, quantize_onnx_model
+from compression.quantize import quantize_ctc_onnx, quantize_rnnt_onnx
 
 
 # ---------- I/O (separated for easy swap-in of existing project utilities) ----------
@@ -196,68 +196,59 @@ def evaluate_model(
         quantize: bool = False,
         reference_nemo_path: str | None = None,
         ) -> dict:
-    is_onnx = model_path.endswith(".onnx")
-
-    # Tokenizer/decoding/dataloader scaffolding always comes from a real
-    # NeMo model -- for a .onnx model_path, that's a SEPARATE checkpoint
-    # (whatever it was exported from), since ONNX graphs carry no
-    # tokenizer/vocab/decoding logic of their own.
-    nemo_path = reference_nemo_path if is_onnx else model_path
+    is_onnx_input = model_path.endswith(".onnx")
+    nemo_path = reference_nemo_path if is_onnx_input else model_path
     if nemo_path is None:
-        raise ValueError(
-            "model_path is .onnx -- reference_nemo_path (the .nemo checkpoint "
-            "it was exported from) is required for tokenizer/decoding/dataloader setup."
-        )
+        raise ValueError("reference_nemo_path is required when model_path is .onnx.")
 
     nemo_model = model_class.restore_from(nemo_path)
     model_utils.setup_model_for_validation(nemo_model, cfg)
-
     trainer = model_utils.create_trainer(cfg)
     device = trainer.strategy.root_device if trainer.strategy else torch.device("cpu")
     nemo_model.to(device)
+
+    is_rnnt = isinstance(nemo_model, EncDecRNNTModel)
+    if is_rnnt and is_onnx_input:
+        raise NotImplementedError(
+            "Standalone .onnx model_path isn't supported for RNNT -- both "
+            "encoder and decoder_joint graphs are needed together. Pass the "
+            "source .nemo file; both will be exported automatically."
+        )
 
     language_items = list(language_codes.items())
     _, first_lang_code = language_items[0]
     setup_validation_for_language(nemo_model, cfg, first_lang_code)
 
-    if is_onnx:
-        input_names = tuple(inp.name for inp in onnx.load(model_path).graph.input)
-        baseline_size = os.path.getsize(model_path)
+    # Always compress via ONNX export -- not the NNCF PyTorch-model backend,
+    # which repeatedly failed to produce real storage reduction for this
+    # architecture (deepcopy proxies, positional-arg mismatches, DQ
+    # strip-format errors on core layers).
+    if is_onnx_input:
+        onnx_paths = (model_path,)
     else:
-        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
-            baseline_size = model_utils.model_size_on_disk_bytes(nemo_model, tmp.name)
-
-    onnx_session = None
-    quantized_onnx_path = None
+        onnx_base_path = model_path.replace(".nemo", ".onnx")
+        onnx_paths = export_model_to_onnx(nemo_model, onnx_base_path)
+    baseline_size = sum(os.path.getsize(p) for p in onnx_paths)
 
     if quantize:
-        if is_onnx:
-            onnx_model = onnx.load(model_path)
-            quantized_onnx_model = quantize_onnx_model(onnx_model, nemo_model._validation_dl, input_names)
-            quantized_onnx_path = model_path.replace(".onnx", "_int8.onnx")
-            onnx.save(quantized_onnx_model, quantized_onnx_path)
-            compressed_size = os.path.getsize(quantized_onnx_path)
+        if is_rnnt:
+            quantized_paths = quantize_rnnt_onnx(*onnx_paths, nemo_model, nemo_model._validation_dl, device)
         else:
-            nemo_model = quantize_model(nemo_model)
-            setup_validation_for_language(nemo_model, cfg, first_lang_code)
-            with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
-                compressed_size = model_utils.model_size_on_disk_bytes(nemo_model, tmp.name)
+            quantized_paths = (quantize_ctc_onnx(onnx_paths[0], nemo_model._validation_dl, device),)
     else:
-        compressed_size = baseline_size
-        if is_onnx:
-            quantized_onnx_path = model_path  # evaluate the unquantized ONNX as-is
-
-    if is_onnx:
-        onnx_session = ort.InferenceSession(quantized_onnx_path)
+        quantized_paths = onnx_paths
+    compressed_size = sum(os.path.getsize(p) for p in quantized_paths)
 
     print(f" Baseline size: {baseline_size / 1e6:.1f} MB, compressed size: {compressed_size / 1e6:.1f} MB "
           f"({100 * (1 - compressed_size / baseline_size):.1f}% reduction)")
 
-    results = {
-        "baseline_size(MB)": baseline_size / 1e6,
-        "compressed_size(MB)": compressed_size / 1e6,
-        "languages": {}
-    }
+    if is_rnnt:
+        encoder_path, decoder_joint_path = quantized_paths
+    else:
+        onnx_session = ort.InferenceSession(quantized_paths[0])
+        input_names = tuple(inp.name for inp in onnx.load(quantized_paths[0]).graph.input)
+
+    results = {"baseline_size(MB)": baseline_size / 1e6, "compressed_size(MB)": compressed_size / 1e6, "languages": {}}
     baseline_languages = (baseline_entry or {}).get("languages", {})
 
     for i, (lang_name, lang_code) in enumerate(language_items):
@@ -265,12 +256,14 @@ def evaluate_model(
         if i > 0:
             setup_validation_for_language(nemo_model, cfg, lang_code)
 
-        if is_onnx:
+        if is_rnnt:
+            references, hypotheses = run_rnnt_onnx_inference(
+                nemo_model, encoder_path, decoder_joint_path, nemo_model._validation_dl, device
+            )
+        else:
             references, hypotheses = run_onnx_inference(
                 onnx_session, input_names, nemo_model._validation_dl, nemo_model, device
             )
-        else:
-            references, hypotheses = run_model_inference(nemo_model, nemo_model._validation_dl, device)
         references, hypotheses = clean_references_hypotheses(references, hypotheses)
 
         evaluator = ASREvaluator()
