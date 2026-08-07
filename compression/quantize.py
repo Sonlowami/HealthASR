@@ -39,8 +39,8 @@ def build_onnx_calibration_dataset(val_loader, input_names: tuple[str, str], dev
             signal = signal.to(device)
             signal_len = signal_len.to(device)
         return {
-            input_names[0]: signal.numpy(),
-            input_names[1]: signal_len.numpy(),
+            input_names[0]: signal.cpu().numpy(),
+            input_names[1]: signal_len.cpu().numpy(),
         }
     return nncf.Dataset(val_loader, transform_fn)
 
