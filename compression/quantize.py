@@ -1,5 +1,7 @@
 import nncf
 from nncf.torch.strip import StripFormat
+import onnx
+import numpy as np
 import sys
 from pathlib import Path
 
@@ -24,6 +26,35 @@ def build_calibration_dataset_from_loader(val_loader, device=None) -> nncf.Datas
         return signal, signal_len
 
     return nncf.Dataset(val_loader, transform_fn)
+
+def build_onnx_calibration_dataset(val_loader, input_names: tuple[str, str]) -> nncf.Dataset:
+    """
+    input_names: the ONNX graph's actual input names (check via
+    onnx.load('model.onnx').graph.input -- don't assume; NeMo's exporter
+    may not name them exactly 'input_signal'/'input_signal_length').
+    """
+    def transform_fn(batch):
+        signal, signal_len, _, _ = batch
+        return {
+            input_names[0]: signal.numpy(),
+            input_names[1]: signal_len.numpy(),
+        }
+    return nncf.Dataset(val_loader, transform_fn)
+
+def quantize_onnx_model(model, val_loader, input_names: tuple[str, str]):
+    """
+    input_names: the ONNX graph's actual input names (check via
+    onnx.load('model.onnx').graph.input -- don't assume; NeMo's exporter
+    may not name them exactly 'input_signal'/'input_signal_length').
+    """
+    calibration_dataset = build_onnx_calibration_dataset(val_loader, input_names)
+    quantized_model = nncf.quantize(
+        model,
+        calibration_dataset,
+        #ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*", ".*featurizer.*"]),
+        )
+    return quantized_model
+
 
 def quantize_model(model):
     """
@@ -69,12 +100,13 @@ def quantize_model(model):
             calibration_dataset,
             ignored_scope=nncf.IgnoredScope(patterns=[".*pos_enc.*", ".*featurizer.*"]),
             )
-        quantized_model = nncf.strip(
-            quantized_wrapper,
-            example_input=example_input,
-            strip_format=StripFormat.DQ
-            )
-        model = quantized_model.model
+        # nncf doesn't work well stripping nemo models.
+        # quantized_wrapper = nncf.strip(
+        #     quantized_wrapper,
+        #     example_input=example_input,
+        #     strip_format=StripFormat.DQ
+        #     )
+        model = quantized_wrapper.model
     except Exception as e:
         print(f"Quantization failed: {e}")
         raise e

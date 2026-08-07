@@ -8,6 +8,11 @@ import torch.nn as nn
 from omegaconf import OmegaConf, open_dict
 import tempfile
 import nncf
+import onnx
+import onnxruntime as ort
+import os
+from nemo.collections.asr.parts.submodules.rnnt_greedy_decoding import ONNXGreedyBatchedRNNTInfer
+from nemo.collections.asr.models import EncDecRNNTModel, EncDecCTCModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -17,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import utils.model_utils as model_utils
 from data_cleaning.src.config import LANGUAGES
 from evaluation import ASREvaluator
-from compression.quantize import quantize_model
+from compression.quantize import quantize_model, quantize_onnx_model
 
 
 # ---------- I/O (separated for easy swap-in of existing project utilities) ----------
@@ -40,6 +45,22 @@ def clean_references_hypotheses(references: list[str], hypotheses: list[str]) ->
     cleaned_references = [ref.strip().replace("?", "") for ref in references]
     cleaned_hypotheses = [hyp.strip().replace("?", "") for hyp in hypotheses]
     return cleaned_references, cleaned_hypotheses
+
+
+def export_model_to_onnx(nemo_model, base_path: str) -> tuple[str, ...]:
+    """
+    Dispatches export based on model type. CTC produces one file at
+    exactly base_path. RNNT produces two, with NeMo-prepended prefixes
+    on base_path's filename -- confirmed via NeMo's own reference script.
+    """
+    nemo_model.export(base_path)
+    if isinstance(nemo_model, EncDecRNNTModel):
+        directory, filename = os.path.split(base_path)
+        encoder_path = os.path.join(directory, f"encoder-{filename}")
+        decoder_joint_path = os.path.join(directory, f"decoder_joint-{filename}")
+        return (encoder_path, decoder_joint_path)
+    else:
+        return (base_path,)
 
 # ---------- inference ----------
 
@@ -106,34 +127,128 @@ def setup_validation_for_language(model, cfg, language_code: str) -> None:
         lang_ds_cfg.manifest_filepath = manifest_path
     model.setup_validation_data(lang_ds_cfg)
 
+
+def run_onnx_inference(session: ort.InferenceSession, input_names, val_loader, decoding_model, device) -> tuple[list[str], list[str]]:
+    """
+    Same role as run_model_inference, but runs the forward pass via
+    onnxruntime instead of model.forward(). Reuses decoding_model's
+    .decoding/.tokenizer so hypotheses/references are computed identically
+    to the PyTorch path -- only the log_probs source differs.
+    """
+    references, hypotheses = [], []
+    for batch in val_loader:
+        signal, signal_len, tokens, token_len = batch
+
+        ort_inputs = {
+            input_names[0]: signal.numpy(),
+            input_names[1]: signal_len.numpy(),
+        }
+        ort_outputs = session.run(None, ort_inputs)
+        # ASSUMPTION, unverified: output[0] is log_probs, output[1] is
+        # encoded_len, matching NeMo's forward() order. Confirm against
+        # actual ONNX output names/order before trusting this.
+        log_probs = torch.from_numpy(ort_outputs[0]).to(device)
+        encoded_len = torch.from_numpy(ort_outputs[1]).to(device)
+
+        hyps = decoding_model.decoding.ctc_decoder_predictions_tensor(log_probs, encoded_len)
+
+        tokens_np, token_len_np = tokens.cpu().numpy(), token_len.cpu().numpy()
+        for t, t_len, hyp in zip(tokens_np, token_len_np, hyps):
+            references.append(decoding_model.tokenizer.ids_to_text(t[:t_len].tolist()))
+            hypotheses.append(" ".join(hyp.words))
+    return references, hypotheses
+
+def run_rnnt_onnx_inference(nemo_model, encoder_path, decoder_joint_path, val_loader, device, max_symbols_per_step=5):
+    """
+    Mirrors NeMo's own infer_transducer_onnx.py reference script, but
+    reuses our validation dataloader (which already carries tokens/token_len
+    for references) instead of nemo_model.transcribe() over a manifest.
+    """
+    decoding = ONNXGreedyBatchedRNNTInfer(encoder_path, decoder_joint_path, max_symbols_per_step)
+
+    references, hypotheses = [], []
+    for batch in val_loader:
+        signal, signal_len, tokens, token_len = batch
+        signal, signal_len = signal.to(device), signal_len.to(device)
+
+        processed_audio, processed_audio_len = nemo_model.preprocessor(
+            input_signal=signal, length=signal_len
+        )
+
+        raw_hyps = decoding(audio_signal=processed_audio, length=processed_audio_len)
+        decoded_hyps = nemo_model.decoding.decode_hypothesis(raw_hyps)
+        hyp_texts = [h.text for h in decoded_hyps]
+
+        tokens_np, token_len_np = tokens.cpu().numpy(), token_len.cpu().numpy()
+        for t, t_len, hyp_text in zip(tokens_np, token_len_np, hyp_texts):
+            references.append(nemo_model.tokenizer.ids_to_text(t[:t_len].tolist()))
+            hypotheses.append(hyp_text)
+
+    return references, hypotheses
+
+
 def evaluate_model(
         model_path: str,
         model_class,
         cfg,
         baseline_entry: dict | None,
         language_codes: dict[str, str],
-        quantize: bool = False
+        quantize: bool = False,
+        reference_nemo_path: str | None = None,
         ) -> dict:
-    model = model_class.restore_from(model_path)
-    model_utils.setup_model_for_validation(model, cfg)
+    is_onnx = model_path.endswith(".onnx")
+
+    # Tokenizer/decoding/dataloader scaffolding always comes from a real
+    # NeMo model -- for a .onnx model_path, that's a SEPARATE checkpoint
+    # (whatever it was exported from), since ONNX graphs carry no
+    # tokenizer/vocab/decoding logic of their own.
+    nemo_path = reference_nemo_path if is_onnx else model_path
+    if nemo_path is None:
+        raise ValueError(
+            "model_path is .onnx -- reference_nemo_path (the .nemo checkpoint "
+            "it was exported from) is required for tokenizer/decoding/dataloader setup."
+        )
+
+    nemo_model = model_class.restore_from(nemo_path)
+    model_utils.setup_model_for_validation(nemo_model, cfg)
 
     trainer = model_utils.create_trainer(cfg)
     device = trainer.strategy.root_device if trainer.strategy else torch.device("cpu")
-    model.to(device)
+    nemo_model.to(device)
 
-    with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
-        baseline_size = model_utils.model_size_on_disk_bytes(model, tmp.name)
     language_items = list(language_codes.items())
     _, first_lang_code = language_items[0]
-    setup_validation_for_language(model, cfg, first_lang_code)
-    if quantize:
-        model = quantize_model(model)  # strip so size reflects real reduced-precision storage
-        setup_validation_for_language(model, cfg, next(iter(language_codes.values())))
-    # (a future prune_model(model) step, if/when added, would slot in right here --
-    #  size is measured AFTER whatever compression steps ran, on the same model object)
+    setup_validation_for_language(nemo_model, cfg, first_lang_code)
 
-    with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
-        compressed_size = model_utils.model_size_on_disk_bytes(model, tmp.name)
+    if is_onnx:
+        input_names = tuple(inp.name for inp in onnx.load(model_path).graph.input)
+        baseline_size = os.path.getsize(model_path)
+    else:
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
+            baseline_size = model_utils.model_size_on_disk_bytes(nemo_model, tmp.name)
+
+    onnx_session = None
+    quantized_onnx_path = None
+
+    if quantize:
+        if is_onnx:
+            onnx_model = onnx.load(model_path)
+            quantized_onnx_model = quantize_onnx_model(onnx_model, nemo_model._validation_dl, input_names)
+            quantized_onnx_path = model_path.replace(".onnx", "_int8.onnx")
+            onnx.save(quantized_onnx_model, quantized_onnx_path)
+            compressed_size = os.path.getsize(quantized_onnx_path)
+        else:
+            nemo_model = quantize_model(nemo_model)
+            setup_validation_for_language(nemo_model, cfg, first_lang_code)
+            with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
+                compressed_size = model_utils.model_size_on_disk_bytes(nemo_model, tmp.name)
+    else:
+        compressed_size = baseline_size
+        if is_onnx:
+            quantized_onnx_path = model_path  # evaluate the unquantized ONNX as-is
+
+    if is_onnx:
+        onnx_session = ort.InferenceSession(quantized_onnx_path)
 
     print(f" Baseline size: {baseline_size / 1e6:.1f} MB, compressed size: {compressed_size / 1e6:.1f} MB "
           f"({100 * (1 - compressed_size / baseline_size):.1f}% reduction)")
@@ -142,15 +257,20 @@ def evaluate_model(
         "baseline_size(MB)": baseline_size / 1e6,
         "compressed_size(MB)": compressed_size / 1e6,
         "languages": {}
-        }
-    language_items = list(language_codes.items())
+    }
     baseline_languages = (baseline_entry or {}).get("languages", {})
+
     for i, (lang_name, lang_code) in enumerate(language_items):
         print(f" -- language: {lang_name} ({lang_code}) --")
         if i > 0:
-            setup_validation_for_language(model, cfg, lang_code)
+            setup_validation_for_language(nemo_model, cfg, lang_code)
 
-        references, hypotheses = run_model_inference(model, model._validation_dl, device)
+        if is_onnx:
+            references, hypotheses = run_onnx_inference(
+                onnx_session, input_names, nemo_model._validation_dl, nemo_model, device
+            )
+        else:
+            references, hypotheses = run_model_inference(nemo_model, nemo_model._validation_dl, device)
         references, hypotheses = clean_references_hypotheses(references, hypotheses)
 
         evaluator = ASREvaluator()
