@@ -140,8 +140,8 @@ def run_onnx_inference(session: ort.InferenceSession, input_names, val_loader, d
         signal, signal_len, tokens, token_len = batch
 
         ort_inputs = {
-            input_names[0]: signal.numpy(),
-            input_names[1]: signal_len.numpy(),
+            input_names[0]: signal.cpu().numpy(),
+            input_names[1]: signal_len.cpu().numpy(),
         }
         ort_outputs = session.run(None, ort_inputs)
         # ASSUMPTION, unverified: output[0] is log_probs, output[1] is
