@@ -56,7 +56,7 @@ def quantize_onnx_model(model, val_loader, input_names: tuple[str, str], device=
     onnx.load('model.onnx').graph.input -- don't assume; NeMo's exporter
     may not name them exactly 'input_signal'/'input_signal_length').
     """
-    calibration_dataset = build_onnx_calibration_dataset(val_loader, input_names, device)
+    calibration_dataset = build_onnx_calibration_dataset(model, val_loader, input_names, device)
     quantized_model = nncf.quantize(
         model,
         calibration_dataset,
@@ -64,10 +64,10 @@ def quantize_onnx_model(model, val_loader, input_names: tuple[str, str], device=
         )
     return quantized_model
 
-def quantize_ctc_onnx(onnx_path: str, val_loader, device) -> str:
+def quantize_ctc_onnx(model, onnx_path: str, val_loader, device) -> str:
     onnx_model = onnx.load(onnx_path)
     input_names = tuple(inp.name for inp in onnx_model.graph.input)
-    calibration_dataset = build_onnx_calibration_dataset(val_loader, input_names, device)
+    calibration_dataset = build_onnx_calibration_dataset(model, val_loader, input_names, device)
     quantized = nncf.quantize(onnx_model, calibration_dataset)
     quantized_path = onnx_path.replace(".onnx", "_int8.onnx")
     onnx.save(quantized, quantized_path)
@@ -84,7 +84,7 @@ def quantize_rnnt_onnx(encoder_path: str, decoder_joint_path: str, nemo_model, v
     as-is, so results stay honest about what was actually compressed rather
     than silently claiming full RNNT quantization.
     """
-    quantized_encoder_path = quantize_ctc_onnx(encoder_path, val_loader, device)
+    quantized_encoder_path = quantize_ctc_onnx(nemo_model, encoder_path, val_loader, device)
     print("  NOTE: decoder_joint graph is NOT yet quantized (calibration shape "
           "unconfirmed for its autoregressive per-step inputs) -- only the "
           "encoder was compressed. RNNT compression numbers currently "
