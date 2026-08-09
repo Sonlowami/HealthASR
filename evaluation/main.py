@@ -3,9 +3,15 @@ import json
 from pathlib import Path
 import sys
 import copy
+import tempfile
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf, open_dict
+from torchao.quantization import (Int8WeightOnlyConfig,
+                                  Int4WeightOnlyConfig,
+                                  Int8DynamicActivationInt8WeightConfig,
+                                  Float8DynamicActivationFloat8WeightConfig,
+                                  Float8WeightOnlyConfig)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -13,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	print(f"Added {PROJECT_ROOT} to sys.path")
 
 import utils.model_utils as model_utils
+from compression.quantization import quantize_model
 from data_cleaning.src.config import LANGUAGES
 from evaluation import ASREvaluator  # the class from the previous turn
 
@@ -106,6 +113,19 @@ def estimate_macs(model, sample_batch):
     finally:
         _remove_thop_hooks(model)
 
+
+def measure_model_size_bytes(model) -> int:
+    """Serialize model weights and return on-disk size in bytes."""
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
+            tmp_path = tmp.name
+        torch.save(model.state_dict(), tmp_path)
+        return Path(tmp_path).stat().st_size
+    finally:
+        if tmp_path is not None:
+            Path(tmp_path).unlink(missing_ok=True)
+
 # ---------- inference ----------
 
 def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str]]:
@@ -171,7 +191,15 @@ def setup_validation_for_language(model, cfg, language_code: str) -> None:
         lang_ds_cfg.manifest_filepath = manifest_path
     model.setup_validation_data(lang_ds_cfg)
 
-def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | None, language_codes: dict[str, str]) -> dict:
+def evaluate_model(
+    model_path: str,
+    model_class,
+    cfg,
+    baseline_entry: dict | None,
+    language_codes: dict[str, str],
+    quantize: bool = False,
+    finetune: bool = False,
+) -> dict:
     """
     Loads one model, computes params/MACs once (model-level, language-
     independent), then for each requested language: rebuilds the
@@ -179,6 +207,43 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     and computes WER/CER (+ CES if a usable baseline is available for
     that language).
     """
+    def evaluate_languages_for_model(model, device):
+        language_items_local = list(language_codes.items())
+        _, first_lang_code_local = language_items_local[0]
+        setup_validation_for_language(model, cfg, first_lang_code_local)
+
+        per_language = {}
+        for i, (lang_name, lang_code) in enumerate(language_items_local):
+            print(f"  -- language: {lang_name} ({lang_code}) --")
+            if i > 0:
+                setup_validation_for_language(model, cfg, lang_code)
+
+            references, hypotheses = run_model_inference(model, model._validation_dl, device)
+            references, hypotheses = clean_references_hypotheses(references, hypotheses)
+
+            evaluator = ASREvaluator()
+            evaluator.compute_wer(references, hypotheses)
+            evaluator.compute_cer(references, hypotheses)
+            per_language[lang_name] = evaluator.__to_dict__()
+
+        return per_language
+
+    finetune_cfg = cfg.get("finetune", {})
+    finetune_epochs = int(finetune_cfg.get("epoch", finetune_cfg.get("epochs", 1)))
+    finetune_lr = finetune_cfg.get("lr")
+
+    def finetune_quantized_model(q_model):
+        model_utils.setup_model(q_model, cfg)
+        if finetune_lr is not None:
+            optim_cfg = copy.deepcopy(q_model.cfg.optim)
+            with open_dict(optim_cfg):
+                optim_cfg.lr = finetune_lr
+            q_model.setup_optimization(optim_config=optim_cfg)
+
+        ft_trainer = model_utils.create_trainer(cfg)
+        ft_trainer.fit_loop.max_epochs = finetune_epochs
+        ft_trainer.fit(q_model)
+
     model = model_class.restore_from(model_path)
     model_utils.setup_model_for_validation(model, cfg)
 
@@ -191,45 +256,103 @@ def evaluate_model(model_path: str, model_class, cfg, baseline_entry: dict | Non
     language_items = list(language_codes.items())
     _, first_lang_code = language_items[0]
     setup_validation_for_language(model, cfg, first_lang_code)
-
     sample_batch = next(iter(model._validation_dl))
     macs = estimate_macs(model, sample_batch)
 
-    baseline_languages = (baseline_entry or {}).get("languages", {})
-    baseline_params = (baseline_entry or {}).get("params")
-    baseline_macs = (baseline_entry or {}).get("macs")
+    if not quantize:
+        baseline_languages = (baseline_entry or {}).get("languages", {})
+        baseline_params = (baseline_entry or {}).get("params")
+        baseline_macs = (baseline_entry or {}).get("macs")
 
-    results = {"params": params, "macs": macs, "languages": {}}
+        results = {"params": params, "macs": macs, "languages": evaluate_languages_for_model(model, device)}
 
-    for i, (lang_name, lang_code) in enumerate(language_items):
-        print(f"  -- language: {lang_name} ({lang_code}) --")
-        if i > 0:
-            # first language's dataloader is already set up above --
-            # only rebuild for languages 2+
-            setup_validation_for_language(model, cfg, lang_code)
+        for lang_name, lang_code in language_items:
+            lang_baseline = baseline_languages.get(lang_name) or baseline_languages.get(lang_code)
+            if lang_baseline is not None and baseline_params is not None and baseline_macs is not None and macs is not None:
+                evaluator = ASREvaluator()
+                evaluator.cer = results["languages"][lang_name]["cer"]
+                results["languages"][lang_name]["ces"] = evaluator.compute_ces(
+                    params_baseline=baseline_params,
+                    params_pruned=params,
+                    macs_baseline=baseline_macs,
+                    macs_pruned=macs,
+                    cer_baseline=lang_baseline["cer"],
+                )
+            else:
+                print(f"  Missing baseline (params/macs/cer) for language '{lang_name}' -- skipping CES.")
 
-        references, hypotheses = run_model_inference(model, model._validation_dl, device)
-        references, hypotheses = clean_references_hypotheses(references, hypotheses)
+        return results
 
-        evaluator = ASREvaluator()
-        evaluator.compute_wer(references, hypotheses)
-        evaluator.compute_cer(references, hypotheses)
+    quantization_configs = {
+        "int8_weight_only": Int8WeightOnlyConfig(),
+        "int4_weight_only": Int4WeightOnlyConfig(),
+        "int8_dynamic_activation_int8_weight": Int8DynamicActivationInt8WeightConfig(),
+        "float8_dynamic_activation_float8_weight": Float8DynamicActivationFloat8WeightConfig(),
+        "float8_weight_only": Float8WeightOnlyConfig(),
+    }
 
-        lang_baseline = baseline_languages.get(lang_name) or baseline_languages.get(lang_code)
-        if lang_baseline is not None and baseline_params is not None and baseline_macs is not None and macs is not None:
-            evaluator.compute_ces(
-                params_baseline=baseline_params,
-                params_pruned=params,
-                macs_baseline=baseline_macs,
-                macs_pruned=macs,
-                cer_baseline=lang_baseline["cer"],
-            )
-        else:
-            print(f"  Missing baseline (params/macs/cer) for language '{lang_name}' -- skipping CES.")
+    baseline_size = measure_model_size_bytes(model)
+    baseline_language_results = evaluate_languages_for_model(model, device)
 
-        results["languages"][lang_name] = evaluator.__to_dict__()
+    quantization_results = {}
+    for q_name, q_cfg in quantization_configs.items():
+        print(f"  == quantization: {q_name} ==")
+        q_model = model_class.restore_from(model_path)
+        model_utils.setup_model_for_validation(q_model, cfg)
+        q_model.to(device)
 
-    return results
+        try:
+            quantize_model(q_model, config=q_cfg)
+            q_size = measure_model_size_bytes(q_model)
+            q_lang_results = evaluate_languages_for_model(q_model, device)
+
+            for lang_name in q_lang_results:
+                baseline_lang = baseline_language_results.get(lang_name)
+                if baseline_lang is None:
+                    continue
+                evaluator = ASREvaluator()
+                evaluator.cer = q_lang_results[lang_name]["cer"]
+                q_lang_results[lang_name]["ces"] = evaluator.compute_ces_from_size(
+                    size_baseline=baseline_size,
+                    size_quantized=q_size,
+                    cer_baseline=baseline_lang["cer"],
+                )
+
+            quantization_results[q_name] = {
+                "size": q_size,
+                "languages": q_lang_results,
+            }
+
+            if finetune:
+                finetune_quantized_model(q_model)
+                q_ft_lang_results = evaluate_languages_for_model(q_model, device)
+                for lang_name in q_ft_lang_results:
+                    baseline_lang = baseline_language_results.get(lang_name)
+                    if baseline_lang is None:
+                        continue
+                    evaluator = ASREvaluator()
+                    evaluator.cer = q_ft_lang_results[lang_name]["cer"]
+                    q_ft_lang_results[lang_name]["ces"] = evaluator.compute_ces_from_size(
+                        size_baseline=baseline_size,
+                        size_quantized=q_size,
+                        cer_baseline=baseline_lang["cer"],
+                    )
+                quantization_results[q_name]["finetuned"] = {
+                    "languages": q_ft_lang_results,
+                }
+        except Exception as exc:
+            print(f"  Quantization failed for '{q_name}': {exc}")
+            quantization_results[q_name] = {"error": str(exc)}
+
+    return {
+        "baseline": {
+            "params": params,
+            "macs": macs,
+            "size": baseline_size,
+            "languages": baseline_language_results,
+        },
+        "quantization": quantization_results,
+    }
 
 # ---------- entry point ----------
 
@@ -244,6 +367,8 @@ def main():
     parser.add_argument("--baseline_file", default=None,
                          help="Optional JSON: {model_filename: {params, macs, languages: {lang: {cer, wer, combined_error}}}}.")
     parser.add_argument("--output_dir", required=True, help="Directory to save results.json into.")
+    parser.add_argument("--quantize", action="store_true", help="Quantize the model to int8 weight-only before evaluation." )
+    parser.add_argument("--finetune", action="store_true", help="After quantization, fine-tune each quantized model using cfg.finetune before re-evaluation.")
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
@@ -256,7 +381,15 @@ def main():
         model_filename = Path(model_path).name
         print(f"\n=== Evaluating {model_filename} ===")
         baseline_entry = baseline_data.get(model_filename) if args.baseline_file else None
-        results[model_filename] = evaluate_model(model_path, model_class, cfg, baseline_entry, language_codes)
+        results[model_filename] = evaluate_model(
+            model_path,
+            model_class,
+            cfg,
+            baseline_entry,
+            language_codes,
+            quantize=args.quantize,
+            finetune=args.finetune,
+        )
 
     output_path = str(Path(args.output_dir) / "results.json")
     save_json_file(results, output_path)

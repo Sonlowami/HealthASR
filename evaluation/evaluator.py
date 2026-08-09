@@ -71,6 +71,33 @@ class ASREvaluator:
         self.ces = math.sqrt((1 - x) ** 2 + (1 - y) ** 2)
         return self.ces
 
+    def compute_ces_from_size(
+        self,
+        size_baseline: float,
+        size_quantized: float,
+        cer_baseline: float,
+    ) -> float:
+        """
+        CES variant for quantization when params/MACs do not change.
+        Uses model size reduction as resource-saving signal.
+        """
+        if self.cer is None:
+            raise ValueError("Call compute_cer() before compute_ces_from_size() -- it's used as CER_quantized.")
+
+        if size_baseline <= 0:
+            raise ValueError("size_baseline must be > 0 for compute_ces_from_size().")
+
+        size_reduction = (size_baseline - size_quantized) / size_baseline
+        x = size_reduction
+
+        if cer_baseline <= 0:
+            y = 1.0 if self.cer == 0 else 0.0
+        else:
+            y = max(0.0, 1 - (self.cer - cer_baseline) / cer_baseline)
+
+        self.ces = math.sqrt((1 - x) ** 2 + (1 - y) ** 2)
+        return self.ces
+
     def __to_dict__(self) -> dict:
         return {
             "wer": self.wer,
