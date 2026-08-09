@@ -230,7 +230,7 @@ def evaluate_model(
         if is_rnnt:
             quantized_paths = quantize_rnnt_onnx(*onnx_paths, nemo_model, nemo_model._validation_dl, device)
         else:
-            quantized_paths = (quantize_ctc_onnx(onnx_paths[0], nemo_model._validation_dl, device),)
+            quantized_paths = (quantize_ctc_onnx(nemo_model, onnx_paths[0], nemo_model._validation_dl, device),)
     else:
         quantized_paths = onnx_paths
     compressed_size = sum(os.path.getsize(p) for p in quantized_paths)
