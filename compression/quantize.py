@@ -3,6 +3,7 @@ from nncf.torch.strip import StripFormat
 import onnx
 import numpy as np
 import sys
+import torch
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,20 +28,25 @@ def build_calibration_dataset_from_loader(val_loader, device=None) -> nncf.Datas
 
     return nncf.Dataset(val_loader, transform_fn)
 
-def build_onnx_calibration_dataset(val_loader, input_names: tuple[str, str], device=None) -> nncf.Dataset:
+def build_onnx_calibration_dataset(nemo_model, val_loader, input_names: tuple[str, str], device) -> nncf.Dataset:
     """
-    input_names: the ONNX graph's actual input names (check via
-    onnx.load('model.onnx').graph.input -- don't assume; NeMo's exporter
-    may not name them exactly 'input_signal'/'input_signal_length').
+    input_names: confirmed via the runtime error to be something like
+    ('audio_signal', 'length') -- verify against
+    onnx.load(path).graph.input for the exact names before trusting this.
+    The exported graph starts AFTER preprocessing (rank-3 mel features),
+    not from raw waveform -- must run nemo_model.preprocessor first,
+    mirroring NeMo's own RNNT reference script.
     """
     def transform_fn(batch):
         signal, signal_len, _, _ = batch
-        if device is not None:
-            signal = signal.to(device)
-            signal_len = signal_len.to(device)
+        signal, signal_len = signal.to(device), signal_len.to(device)
+        with torch.no_grad():
+            processed_audio, processed_audio_len = nemo_model.preprocessor(
+                input_signal=signal, length=signal_len
+            )
         return {
-            input_names[0]: signal.cpu().numpy(),
-            input_names[1]: signal_len.cpu().numpy(),
+            input_names[0]: processed_audio.cpu().numpy(),
+            input_names[1]: processed_audio_len.cpu().numpy(),
         }
     return nncf.Dataset(val_loader, transform_fn)
 
@@ -108,7 +114,6 @@ def quantize_model(model):
     signal, signal_len, _, _ = sample_batch
     device = next(model.parameters()).device
     signal, signal_len = signal.to(device), signal_len.to(device)
-    example_input = (signal, signal_len)
 
     model._validation_dl = None
     device = next(model.parameters()).device

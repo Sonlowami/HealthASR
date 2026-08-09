@@ -127,34 +127,30 @@ def setup_validation_for_language(model, cfg, language_code: str) -> None:
         lang_ds_cfg.manifest_filepath = manifest_path
     model.setup_validation_data(lang_ds_cfg)
 
-
-def run_onnx_inference(session: ort.InferenceSession, input_names, val_loader, decoding_model, device) -> tuple[list[str], list[str]]:
-    """
-    Same role as run_model_inference, but runs the forward pass via
-    onnxruntime instead of model.forward(). Reuses decoding_model's
-    .decoding/.tokenizer so hypotheses/references are computed identically
-    to the PyTorch path -- only the log_probs source differs.
-    """
+def run_onnx_inference(session, input_names, val_loader, nemo_model, device) -> tuple[list[str], list[str]]:
     references, hypotheses = [], []
     for batch in val_loader:
         signal, signal_len, tokens, token_len = batch
+        signal, signal_len = signal.to(device), signal_len.to(device)
+
+        with torch.no_grad():
+            processed_audio, processed_audio_len = nemo_model.preprocessor(
+                input_signal=signal, length=signal_len
+            )
 
         ort_inputs = {
-            input_names[0]: signal.cpu().numpy(),
-            input_names[1]: signal_len.cpu().numpy(),
+            input_names[0]: processed_audio.cpu().numpy(),
+            input_names[1]: processed_audio_len.cpu().numpy(),
         }
         ort_outputs = session.run(None, ort_inputs)
-        # ASSUMPTION, unverified: output[0] is log_probs, output[1] is
-        # encoded_len, matching NeMo's forward() order. Confirm against
-        # actual ONNX output names/order before trusting this.
         log_probs = torch.from_numpy(ort_outputs[0]).to(device)
         encoded_len = torch.from_numpy(ort_outputs[1]).to(device)
 
-        hyps = decoding_model.decoding.ctc_decoder_predictions_tensor(log_probs, encoded_len)
+        hyps = nemo_model.decoding.ctc_decoder_predictions_tensor(log_probs, encoded_len)
 
         tokens_np, token_len_np = tokens.cpu().numpy(), token_len.cpu().numpy()
         for t, t_len, hyp in zip(tokens_np, token_len_np, hyps):
-            references.append(decoding_model.tokenizer.ids_to_text(t[:t_len].tolist()))
+            references.append(nemo_model.tokenizer.ids_to_text(t[:t_len].tolist()))
             hypotheses.append(" ".join(hyp.words))
     return references, hypotheses
 
