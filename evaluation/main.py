@@ -342,7 +342,8 @@ def evaluate_model(
                 }
         except Exception as exc:
             print(f"  Quantization failed for '{q_name}': {exc}")
-            quantization_results[q_name] = {"error": str(exc)}
+            raise exc
+            #quantization_results[q_name] = {"error": str(exc)}
 
     return {
         "baseline": {
