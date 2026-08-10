@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from omegaconf import OmegaConf, open_dict
 from torchao.quantization import (Int8WeightOnlyConfig,
-                                  Int4WeightOnlyConfig,
+                                  #Int4WeightOnlyConfig,
                                   Int8DynamicActivationInt8WeightConfig,
                                   Float8DynamicActivationFloat8WeightConfig,
                                   Float8WeightOnlyConfig)
