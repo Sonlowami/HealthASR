@@ -1,8 +1,8 @@
 # Kin-only curriculum FT from Sunbird SALT (fair compare to kin-only e10 no-curriculum).
 # WER rescoring at each stage. Full Kin train (~180k clips).
-# Checkpoints under $HOME — /project may be wiped; save each epoch, keep last 2 only.
+# Checkpoints on /project/community; save every epoch; keep last 2.
 checkpoint: Sunbird/asr-whisper-large-v3-salt
-output_dir: /home/rmwisene/whisper_runs/kin-only-curriculum-e10
+output_dir: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-only-curriculum-e10
 
 languages:
   kinyarwanda:
@@ -25,9 +25,8 @@ training:
   report_to: wandb
   run_name: whisper-salt-kin-only-curriculum-e10
   early_stopping_patience: null
-  # Save each epoch; keep last 2 (~10–24 GB) so a half-written save doesn't leave you stuck
   save_strategy: epoch
-  save_total_limit: 2
+  save_total_limit: 2              # full ckpt (model+optimizer) for real --resume
 
 curriculum:
   schedule: [0.2, 0.5, 0.7, 1.0]
