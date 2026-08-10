@@ -297,12 +297,12 @@ def evaluate_model(
     quantization_results = {}
     for q_name, q_cfg in quantization_configs.items():
         print(f"  == quantization: {q_name} ==")
-        q_model = model_class.restore_from(model_path)
+        q_model = model_class.restore_from(model_path, map_location="cpu")
         model_utils.setup_model_for_validation(q_model, cfg)
-        q_model.to(device)
 
         try:
             quantize_model(q_model, config=q_cfg)
+            q_model.to(device)
             q_size = measure_model_size_bytes(q_model)
             q_lang_results = evaluate_languages_for_model(q_model, device)
 
