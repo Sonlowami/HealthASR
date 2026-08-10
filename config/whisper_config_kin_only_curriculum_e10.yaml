@@ -1,0 +1,37 @@
+# Kin-only curriculum FT from Sunbird SALT (fair compare to kin-only e10 no-curriculum).
+# WER rescoring at each stage. Full Kin train (~180k clips).
+# Checkpoints under $HOME — /project may be wiped; save each epoch, keep last 2 only.
+checkpoint: Sunbird/asr-whisper-large-v3-salt
+output_dir: /home/rmwisene/whisper_runs/kin-only-curriculum-e10
+
+languages:
+  kinyarwanda:
+    train_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/train_processed.tsv
+    eval_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda
+    lang_token_id: 50350   # 'kin'
+    oversample: 1
+
+training:
+  learning_rate: 1.0e-5
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4   # effective batch = 32
+  warmup_steps: 500
+  num_train_epochs: 10             # ignored per-stage; stages use epochs_per_stage
+  eval_steps: 2000
+  logging_steps: 200
+  dataloader_num_workers: 24
+  report_to: wandb
+  run_name: whisper-salt-kin-only-curriculum-e10
+  early_stopping_patience: null
+  # Save each epoch; keep last 2 (~10–24 GB) so a half-written save doesn't leave you stuck
+  save_strategy: epoch
+  save_total_limit: 2
+
+curriculum:
+  schedule: [0.2, 0.5, 0.7, 1.0]
+  epochs_per_stage: [2, 2, 2, 4]   # 2+2+2+4 = 10
+  score_batch_size: 64
+  score_num_workers: 16
+  score_max_new_tokens: 128

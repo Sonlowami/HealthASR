@@ -229,18 +229,21 @@ def build_trainer(model, processor, train_ds, eval_ds, cfg, output_dir,
     patience = tc.pop("early_stopping_patience", None)
     log_every = int(tc.get("logging_steps", 50))
     use_early_stop = patience is not None and int(patience) > 0
-    args = Seq2SeqTrainingArguments(
-        output_dir=output_dir,
-        bf16=True,
-        eval_strategy="steps",
-        save_strategy="steps",
-        load_best_model_at_end=use_early_stop,
-        metric_for_best_model="eval_loss",
-        greater_is_better=False,
-        save_total_limit=2,
-        remove_unused_columns=False,  # collator needs the raw audio/text columns
-        **{**tc, **overrides},
-    )
+    # Defaults; anything under training: in YAML overrides (e.g. save_strategy: epoch).
+    merged = {
+        "output_dir": output_dir,
+        "bf16": True,
+        "eval_strategy": "steps",
+        "save_strategy": "steps",
+        "load_best_model_at_end": use_early_stop,
+        "metric_for_best_model": "eval_loss",
+        "greater_is_better": False,
+        "save_total_limit": 2,
+        "remove_unused_columns": False,  # collator needs the raw audio/text columns
+        **tc,
+        **overrides,
+    }
+    args = Seq2SeqTrainingArguments(**merged)
     callbacks = [EpochProgressCallback()]
     if use_early_stop:
         callbacks.append(EarlyStoppingCallback(early_stopping_patience=int(patience)))
