@@ -285,11 +285,11 @@ def evaluate_model(
 
     quantization_configs = {
         "int8_weight_only": Int8WeightOnlyConfig(),
-        "int4_weight_only": Int4WeightOnlyConfig(
-            group_size=32,
-            int4_packing_format="tile_packed_to_4d",
-            int4_choose_qparams_algorithm="hqq",
-        ),
+        # "int4_weight_only": Int4WeightOnlyConfig(
+        #     group_size=32,
+        #     int4_packing_format="tile_packed_to_4d",
+        #     int4_choose_qparams_algorithm="hqq",
+        # ),
         "int8_dynamic_activation_int8_weight": Int8DynamicActivationInt8WeightConfig(),
         "float8_dynamic_activation_float8_weight": Float8DynamicActivationFloat8WeightConfig(),
         "float8_weight_only": Float8WeightOnlyConfig(),
