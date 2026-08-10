@@ -1,7 +1,8 @@
 from torchao.quantization import quantize_, Int8WeightOnlyConfig
+from torchao.quantization.qat import QATConfig
 
 
-def quantize_model(model, config=None):
+def quantize_model(model, config=None, step="prepare"):
     """
     In-place weight quantization via torchao.
     walks named_modules() directly and swaps matched layers' weights for
@@ -11,7 +12,6 @@ def quantize_model(model, config=None):
     """
     if config is None:
         config = Int8WeightOnlyConfig()
-    model.eval()
-    quantize_(model, config)
+    quantize_(model, QATConfig(config, step=step))
     return model
 

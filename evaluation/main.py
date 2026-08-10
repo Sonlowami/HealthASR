@@ -348,6 +348,8 @@ def evaluate_model(
             print(f"  Quantization failed for '{q_name}': {exc}")
             raise exc
             #quantization_results[q_name] = {"error": str(exc)}
+        finally:
+            quantize_model(q_model, config=q_cfg, step="convert")
 
     return {
         "baseline": {
