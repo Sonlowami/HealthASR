@@ -12,6 +12,10 @@ from torchao.quantization.qat import (
     IntxFakeQuantizeConfig,
     QATConfig,
 )
+from torchao.quantization import (
+    Float8WeightOnlyConfig,
+    Int8WeightOnlyConfig
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -249,6 +253,25 @@ def evaluate_model(
 
         return per_language
 
+    def persist_quantization_after_finetune(q_model, model_class, model_path, cfg, base_config):
+        """
+        QATConfig's documented step="convert" only supports Int4WeightOnlyConfig
+        as a base_config. For other configs (e.g. Int8WeightOnlyConfig, already
+        confirmed to give real size reduction via plain PTQ), there's no
+        supported convert path -- so instead: extract the fine-tuned weights
+        from the fake-quantized model, load them into a FRESH plain model
+        (undoing the FakeQuantizedLinear wrapping), then apply the same
+        plain PTQ quantize_ call already confirmed to work.
+        """
+        finetuned_state_dict = q_model.state_dict()  # fine-tuned weights, still full precision under fake-quant wrapper
+
+        fresh_model = model_class.restore_from(model_path, map_location="cpu")
+        model_utils.setup_model_for_validation(fresh_model, cfg)
+        fresh_model.load_state_dict(finetuned_state_dict, strict=False)  # strict=False: fake-quant wrapper may add/rename some keys
+
+        quantize_model(fresh_model, config=base_config)  # the proven plain-PTQ path
+        return fresh_model
+
     finetune_cfg = cfg.get("finetune", {})
     finetune_epochs = int(finetune_cfg.get("epoch", finetune_cfg.get("epochs", 1)))
     finetune_lr = finetune_cfg.get("lr")
@@ -305,12 +328,17 @@ def evaluate_model(
 
         return results
 
+    base_config = {
+        "float8_weight_qat": Float8WeightOnlyConfig(),
+        "int8_weight_qat": Int8WeightOnlyConfig(),
+    }
+
     quantization_configs = {
-        "float8_activation_float8_weight_qat": QATConfig(
+        "float8_weight_qat": QATConfig(
             weight_config=Float8FakeQuantizeConfig(),
             step="prepare",
         ),
-        "int8_activation_int8_weight_qat": QATConfig(
+        "int8_weight_qat": QATConfig(
             weight_config=IntxFakeQuantizeConfig(
                 torch.int8,
                 "per_channel",
@@ -334,6 +362,14 @@ def evaluate_model(
             q_model.to(device)
             q_size = measure_model_size_bytes(q_model)
             q_lang_results = evaluate_languages_for_model(q_model, device)
+            # Test if persisting a model with manual code works
+            if finetune:
+                q_model = persist_quantization_after_finetune(q_model, model_class, model_path, cfg, base_config[q_name])
+                print(f"  == Yay!! quantization after finetune: {q_name} works !!!==")
+                q_model.to(device)
+                q_size = measure_model_size_bytes(q_model)
+                print(f"  == Size of quantized model: {q_size} bytes ==")
+                q_lang_results = evaluate_languages_for_model(q_model, device)
 
             for lang_name in q_lang_results:
                 baseline_lang = baseline_language_results.get(lang_name)
