@@ -7,11 +7,11 @@ import tempfile
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf, open_dict
-from torchao.quantization import (Int8WeightOnlyConfig,
-                                  #Int4WeightOnlyConfig,
-                                  Int8DynamicActivationInt8WeightConfig,
-                                  Float8DynamicActivationFloat8WeightConfig,
-                                  Float8WeightOnlyConfig)
+from torchao.quantization.qat import (
+    Float8FakeQuantizeConfig,
+    IntxFakeQuantizeConfig,
+    QATConfig,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -284,15 +284,24 @@ def evaluate_model(
         return results
 
     quantization_configs = {
-        "int8_weight_only": Int8WeightOnlyConfig(),
-        # "int4_weight_only": Int4WeightOnlyConfig(
-        #     group_size=32,
-        #     int4_packing_format="tile_packed_to_4d",
-        #     int4_choose_qparams_algorithm="hqq",
-        # ),
-        "int8_dynamic_activation_int8_weight": Int8DynamicActivationInt8WeightConfig(),
-        "float8_dynamic_activation_float8_weight": Float8DynamicActivationFloat8WeightConfig(),
-        "float8_weight_only": Float8WeightOnlyConfig(),
+        "float8_activation_float8_weight_qat": QATConfig(
+            activation_config=Float8FakeQuantizeConfig(),
+            weight_config=Float8FakeQuantizeConfig(),
+            step="prepare",
+        ),
+        "int8_activation_int8_weight_qat": QATConfig(
+            activation_config=IntxFakeQuantizeConfig(
+                torch.int8,
+                "per_token",
+                is_symmetric=False,
+            ),
+            weight_config=IntxFakeQuantizeConfig(
+                torch.int8,
+                "per_channel",
+                is_symmetric=True,
+            ),
+            step="prepare",
+        ),
     }
 
     baseline_size = measure_model_size_bytes(model)
@@ -372,8 +381,8 @@ def main():
     parser.add_argument("--baseline_file", default=None,
                          help="Optional JSON: {model_filename: {params, macs, languages: {lang: {cer, wer, combined_error}}}}.")
     parser.add_argument("--output_dir", required=True, help="Directory to save results.json into.")
-    parser.add_argument("--quantize", action="store_true", help="Quantize the model to int8 weight-only before evaluation." )
-    parser.add_argument("--finetune", action="store_true", help="After quantization, fine-tune each quantized model using cfg.finetune before re-evaluation.")
+    parser.add_argument("--quantize", action="store_true", help="Apply QAT prepare-time fake quantization before evaluation.")
+    parser.add_argument("--finetune", action="store_true", help="After QAT prepare, fine-tune each model using cfg.finetune before re-evaluation.")
     args = parser.parse_args()
 
     cfg = OmegaConf.load(args.config)
