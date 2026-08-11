@@ -374,6 +374,9 @@ def evaluate_model(
                     size_quantized=q_size,
                     cer_baseline=baseline_lang["cer"],
                 )
+                quantization_results[q_name] = {
+                    "languages": q_lang_results,
+                }
 
             if finetune:
                 finetune_quantized_model(q_model)
@@ -395,10 +398,7 @@ def evaluate_model(
                 quantization_results[q_name]["finetuned"] = {
                     "languages": q_ft_lang_results,
                 }
-            quantization_results[q_name] = {
-                "size": q_size,
-                "languages": q_lang_results,
-            }
+            quantization_results[q_name]['size'] = q_size
         except Exception as exc:
             print(f"  Quantization failed for '{q_name}': {exc}")
             raise exc
