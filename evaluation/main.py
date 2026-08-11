@@ -307,16 +307,10 @@ def evaluate_model(
 
     quantization_configs = {
         "float8_activation_float8_weight_qat": QATConfig(
-            activation_config=Float8FakeQuantizeConfig(),
             weight_config=Float8FakeQuantizeConfig(),
             step="prepare",
         ),
         "int8_activation_int8_weight_qat": QATConfig(
-            activation_config=IntxFakeQuantizeConfig(
-                torch.int8,
-                "per_token",
-                is_symmetric=False,
-            ),
             weight_config=IntxFakeQuantizeConfig(
                 torch.int8,
                 "per_channel",
