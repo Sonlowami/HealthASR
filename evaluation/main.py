@@ -362,14 +362,6 @@ def evaluate_model(
             q_model.to(device)
             q_size = measure_model_size_bytes(q_model)
             q_lang_results = evaluate_languages_for_model(q_model, device)
-            # Test if persisting a model with manual code works
-            if finetune:
-                q_model = persist_quantization_after_finetune(q_model, model_class, model_path, cfg, base_config[q_name])
-                print(f"  == Yay!! quantization after finetune: {q_name} works !!!==")
-                q_model.to(device)
-                q_size = measure_model_size_bytes(q_model)
-                print(f"  == Size of quantized model: {q_size} bytes ==")
-                q_lang_results = evaluate_languages_for_model(q_model, device)
 
             for lang_name in q_lang_results:
                 baseline_lang = baseline_language_results.get(lang_name)
@@ -383,13 +375,11 @@ def evaluate_model(
                     cer_baseline=baseline_lang["cer"],
                 )
 
-            quantization_results[q_name] = {
-                "size": q_size,
-                "languages": q_lang_results,
-            }
-
             if finetune:
                 finetune_quantized_model(q_model)
+                q_model = persist_quantization_after_finetune(q_model, model_class, model_path, cfg, base_config[q_name])
+                q_model.to(device)
+                q_size = measure_model_size_bytes(q_model)
                 q_ft_lang_results = evaluate_languages_for_model(q_model, device)
                 for lang_name in q_ft_lang_results:
                     baseline_lang = baseline_language_results.get(lang_name)
@@ -405,6 +395,10 @@ def evaluate_model(
                 quantization_results[q_name]["finetuned"] = {
                     "languages": q_ft_lang_results,
                 }
+            quantization_results[q_name] = {
+                "size": q_size,
+                "languages": q_lang_results,
+            }
         except Exception as exc:
             print(f"  Quantization failed for '{q_name}': {exc}")
             raise exc
