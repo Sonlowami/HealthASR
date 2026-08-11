@@ -191,6 +191,27 @@ def setup_validation_for_language(model, cfg, language_code: str) -> None:
         lang_ds_cfg.manifest_filepath = manifest_path
     model.setup_validation_data(lang_ds_cfg)
 
+
+import lightning.pytorch as pl
+
+class GradientCheckCallback(pl.Callback):
+    def __init__(self, check_every_n_steps=10, param_name_filter="linear1"):
+        self.check_every_n_steps = check_every_n_steps
+        self.param_name_filter = param_name_filter
+
+    def on_before_optimizer_step(self, trainer, pl_module, optimizer):
+        if trainer.global_step % self.check_every_n_steps != 0:
+            return
+        found = False
+        for name, p in pl_module.named_parameters():
+            if not p.requires_grad or self.param_name_filter not in name:
+                continue
+            found = True
+            grad_norm = p.grad.norm().item() if p.grad is not None else None
+            print(f"step {trainer.global_step}: {name} grad_norm={grad_norm}")
+        if not found:
+            print(f"step {trainer.global_step}: no parameters matched filter '{self.param_name_filter}'")
+
 def evaluate_model(
     model_path: str,
     model_class,
@@ -241,6 +262,7 @@ def evaluate_model(
             q_model.setup_optimization(optim_config=optim_cfg)
 
         ft_trainer = model_utils.create_trainer(cfg)
+        ft_trainer.callbacks.append(GradientCheckCallback())
         ft_trainer.fit_loop.max_epochs = finetune_epochs
         ft_trainer.fit(q_model)
 
