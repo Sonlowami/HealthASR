@@ -233,7 +233,7 @@ def evaluate_model(
     finetune_lr = finetune_cfg.get("lr")
 
     def finetune_quantized_model(q_model):
-        model_utils.setup_model(q_model, cfg)
+        model_utils.setup_model(q_model, cfg, change_vocab=False)
         if finetune_lr is not None:
             optim_cfg = copy.deepcopy(q_model.cfg.optim)
             with open_dict(optim_cfg):

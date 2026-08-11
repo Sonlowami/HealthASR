@@ -79,7 +79,7 @@ def create_trainer(cfg: DictConfig) -> pl.Trainer:
     )
     return trainer
 
-def setup_model(model, cfg: DictConfig) -> None:
+def setup_model(model, cfg: DictConfig, change_vocab=True) -> None:
     """
     Set up the model for training or evaluation.
     """
@@ -102,7 +102,8 @@ def setup_model(model, cfg: DictConfig) -> None:
             ds_cfg.tarred_audio_filepaths = None
             if "shard_manifests" in ds_cfg:
                 ds_cfg.shard_manifests = False
-    model.change_vocabulary(new_tokenizer_dir=model_cfg.tokenizer.dir, new_tokenizer_type=model_cfg.tokenizer.type)
+    if change_vocab:
+        model.change_vocabulary(new_tokenizer_dir=model_cfg.tokenizer.dir, new_tokenizer_type=model_cfg.tokenizer.type)
     model.change_decoding_strategy(decoding_cfg=model_cfg.decoding)
     model_cfg.train_ds.batch_size = 6
     model_cfg.validation_ds.batch_size = 6
