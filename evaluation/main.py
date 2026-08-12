@@ -51,9 +51,15 @@ def strip_wrapt_proxies(model):
     afterward on the ORIGINAL object.
     """
     removed = {}
+
+    for attr in ("_validation_dl", "_train_dl"):
+        if attr in model.__dict__:
+            removed[attr] = model.__dict__.pop(attr)
+
     for key, value in list(model.__dict__.items()):
         if isinstance(value, wrapt.ObjectProxy):
             removed[key] = model.__dict__.pop(key)
+
     return removed
 
 def clone_model_via_disk(model):
