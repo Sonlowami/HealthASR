@@ -64,15 +64,17 @@ def bisect_pickle_failure(obj, path="model", max_depth=8):
             print(f"FAILS: {path}.{key} = {type(value)} -- {type(exc).__name__}: {exc}")
             bisect_pickle_failure(value, f"{path}.{key}", max_depth - 1)
 
+def is_wrapt_proxy(value) -> bool:
+    """
+    Duck-types wrapt proxies rather than isinstance(value, wrapt.ObjectProxy),
+    which can miss objects built via wrapt's C-accelerated _wrappers
+    extension if wrapt.ObjectProxy resolves to a different (pure-Python)
+    class object at import time -- confirmed happening in this environment.
+    """
+    return any(cls.__name__ == "ObjectProxy" for cls in type(value).__mro__)
+
+
 def strip_wrapt_proxies(model):
-    """
-    Generically strip any wrapt.ObjectProxy-derived instance attribute
-    from model.__dict__ before serialization -- rather than maintaining
-    a hand-grown allowlist (training_step, trainer, log, _validation_dl,
-    _train_dl have each independently broken deepcopy/pickle/dill in
-    this codebase). Returns the removed {name: value} dict for restoring
-    afterward on the ORIGINAL object.
-    """
     removed = {}
 
     for attr in ("_validation_dl", "_train_dl"):
@@ -80,7 +82,7 @@ def strip_wrapt_proxies(model):
             removed[attr] = model.__dict__.pop(attr)
 
     for key, value in list(model.__dict__.items()):
-        if isinstance(value, wrapt.ObjectProxy):
+        if is_wrapt_proxy(value):
             removed[key] = model.__dict__.pop(key)
 
     return removed
