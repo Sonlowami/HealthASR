@@ -39,35 +39,41 @@ except ImportError as exc:
 def load_json_file(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+import wrapt
+
+def strip_wrapt_proxies(model):
+    """
+    Generically strip any wrapt.ObjectProxy-derived instance attribute
+    from model.__dict__ before serialization -- rather than maintaining
+    a hand-grown allowlist (training_step, trainer, log, _validation_dl,
+    _train_dl have each independently broken deepcopy/pickle/dill in
+    this codebase). Returns the removed {name: value} dict for restoring
+    afterward on the ORIGINAL object.
+    """
+    removed = {}
+    for key, value in list(model.__dict__.items()):
+        if isinstance(value, wrapt.ObjectProxy):
+            removed[key] = model.__dict__.pop(key)
+    return removed
 
 def clone_model_via_disk(model):
     """
     We cannot do copy.deepcopy(model) because @wrapt decorators do not implement __deepcopy__
     and will raise an error. Instead, we save the model to a temporary file and load a copy of it.
     """
-    instance_overrides = {}
-    for attr in ("training_step", "trainer", "log"):
-        if attr in model.__dict__:
-            instance_overrides[attr] = model.__dict__.pop(attr)
+    removed = strip_wrapt_proxies(model)
 
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
             tmp_path = tmp.name
         torch.save(model, tmp_path, pickle_module=dill)
-        cloned_model = torch.load(tmp_path, pickle_module=dill, weight_only=False)
+        cloned_model = torch.load(tmp_path, pickle_module=dill, weights_only=False)
     finally:
         if tmp_path is not None:
             Path(tmp_path).unlink(missing_ok=True)
-        # Restore on the ORIGINAL regardless of success/failure above.
-        for attr, value in instance_overrides.items():
+        for attr, value in removed.items():
             model.__dict__[attr] = value
-
-    # Re-apply the same overrides to the clone too, so its behavior
-    # matches the original as closely as possible (e.g. still
-    # trainer.fit()-able normally afterward if needed).
-    for attr, value in instance_overrides.items():
-        cloned_model.__dict__[attr] = value
 
     return cloned_model
 
