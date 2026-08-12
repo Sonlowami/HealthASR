@@ -464,26 +464,21 @@ def evaluate_model(
                         if "finetuned" not in q_entry:
                             q_model = clone_model_via_disk(current_model)
 
-                            print("\n===== AFTER CLONE =====")
-                            print("type:", type(q_model))
-                            print("MRO:", type(q_model).__mro__)
-                            print("instance has blank_id:", "blank_id" in q_model.__dict__)
+                            fresh = model_class.restore_from(model_path, map_location="cpu")
 
-                            if "blank_id" in q_model.__dict__:
-                                print("instance blank_id:", repr(q_model.__dict__["blank_id"]))
-                                print("instance blank_id type:", type(q_model.__dict__["blank_id"]))
+                            cloned = clone_model_via_disk(current_model)
 
-                            for cls in type(q_model).__mro__:
-                                if "blank_id" in cls.__dict__:
-                                    value = cls.__dict__["blank_id"]
-                                    print(
-                                        "FOUND blank_id in class:",
-                                        cls,
-                                        "value:", repr(value),
-                                        "type:", type(value),
-                                    )
+                            print("FRESH")
+                            print("  decoding:", type(fresh.decoding))
+                            print("  decoding dict:", fresh.decoding.__dict__)
 
-                            print("========================\n")
+                            print("\nCURRENT")
+                            print("  decoding:", type(current_model.decoding))
+                            print("  decoding dict:", current_model.decoding.__dict__)
+
+                            print("\nCLONED")
+                            print("  decoding:", type(cloned.decoding))
+                            print("  decoding dict:", cloned.decoding.__dict__)
                             finetune_model(q_model)
                             q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
                             q_model.to(device)
