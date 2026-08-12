@@ -1,21 +1,14 @@
 import argparse
-import json
-from pathlib import Path
-import sys
 import copy
+import json
+import sys
 import tempfile
+from pathlib import Path
+
 import torch
-import torch.nn as nn
 from omegaconf import OmegaConf, open_dict
-from torchao.quantization.qat import (
-    Float8FakeQuantizeConfig,
-    IntxFakeQuantizeConfig,
-    QATConfig,
-)
-from torchao.quantization import (
-    Float8WeightOnlyConfig,
-    Int8WeightOnlyConfig
-)
+from torchao.quantization import Float8WeightOnlyConfig, Int8WeightOnlyConfig
+from torchao.quantization.qat import Float8FakeQuantizeConfig, IntxFakeQuantizeConfig, QATConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -23,17 +16,16 @@ if str(PROJECT_ROOT) not in sys.path:
 	print(f"Added {PROJECT_ROOT} to sys.path")
 
 import utils.model_utils as model_utils
+from compression.pruning import precompute_prune_dimension, prune_ffns
 from compression.quantization import quantize_model
 from data_cleaning.src.config import LANGUAGES
-from evaluation import ASREvaluator  # the class from the previous turn
+from evaluation import ASREvaluator
 
 try:
     from thop import profile as thop_profile
 except ImportError:
     thop_profile = None
 
-
-# ---------- I/O (separated for easy swap-in of existing project utilities) ----------
 
 def load_json_file(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -45,46 +37,18 @@ def save_json_file(data: dict, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
 def clean_references_hypotheses(references: list[str], hypotheses: list[str]) -> tuple[list[str], list[str]]:
-    """
-    Clean up references and hypotheses for evaluation.
-    This can includes stripping and removing any '?' characters.
-    """
     cleaned_references = [ref.strip().replace("?", "") for ref in references]
     cleaned_hypotheses = [hyp.strip().replace("?", "") for hyp in hypotheses]
     return cleaned_references, cleaned_hypotheses
 
 
-# ---------- model stats ----------
-
 def count_parameters(model) -> int:
     return sum(p.numel() for p in model.parameters())
 
 
-class _KwargsForwardWrapper(nn.Module):
-    """
-    thop calls the profiled module positionally (model(*inputs)), but
-    NeMo's forward() is decorated with @typecheck() and requires
-    input_signal=/input_signal_length= as keywords. This thin wrapper
-    accepts positional args from thop and forwards them as kwargs to the
-    real model.
-    """
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, input_signal, input_signal_length):
-        return self.model.forward(input_signal=input_signal, input_signal_length=input_signal_length)
-
-
 def _remove_thop_hooks(model) -> None:
-    """
-    thop normally removes its own forward hooks once profiling completes,
-    but a failed/interrupted profiling pass can leave them attached --
-    silently corrupting every later forward() call on this model (as just
-    happened: a failed profile broke real evaluation afterward). Strip
-    anything thop may have attached, unconditionally, success or failure.
-    """
     for module in model.modules():
         for attr in ("total_ops", "total_params"):
             if hasattr(module, attr):
@@ -94,17 +58,11 @@ def _remove_thop_hooks(model) -> None:
 
 
 def estimate_macs(model, sample_batch):
-    """
-    Best-effort MACs estimate via thop. Returns None if thop isn't
-    installed or profiling fails for any other reason. Always strips
-    thop's hooks afterward (success or failure) so this can never leave
-    the model in a broken state for subsequent forward() calls.
-    """
     if thop_profile is None:
         print("thop not installed -- skipping MACs estimation.")
         return None
 
-    wrapped = _KwargsForwardWrapper(model)
+    wrapped = model_utils._KwargsForwardWrapper(model)
     try:
         signal, signal_len, _, _ = sample_batch
         device = next(model.parameters()).device
@@ -119,7 +77,6 @@ def estimate_macs(model, sample_batch):
 
 
 def measure_model_size_bytes(model) -> int:
-    """Serialize model weights and return on-disk size in bytes."""
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
@@ -130,10 +87,8 @@ def measure_model_size_bytes(model) -> int:
         if tmp_path is not None:
             Path(tmp_path).unlink(missing_ok=True)
 
-# ---------- inference ----------
 
 def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str]]:
-    """Runs the model over its validation dataloader; returns (references, hypotheses)."""
     model.to(device)
     model.eval()
     references, hypotheses = [], []
@@ -153,14 +108,7 @@ def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str]
     return references, hypotheses
 
 
-# ---------- per-model evaluation ----------
-
 def resolve_language_codes(requested_languages: list[str]) -> dict[str, str]:
-    """
-    Map user-supplied --languages values (names or codes) to {name: code},
-    using LANGUAGES' actual shape: {name: {"code": ..., "dir": ...}}.
-    Raises clearly if a requested language isn't found by either name or code.
-    """
     name_to_code = {name: meta["code"] for name, meta in LANGUAGES.items()}
     code_to_name = {code: name for name, code in name_to_code.items()}
 
@@ -174,14 +122,8 @@ def resolve_language_codes(requested_languages: list[str]) -> dict[str, str]:
             raise ValueError(f"Unknown language '{lang}' -- not found in LANGUAGES (name or code).")
     return resolved
 
+
 def setup_validation_for_language(model, cfg, language_code: str) -> None:
-    """
-    Rebuild the model's validation dataloader to point at the
-    language-specific manifest ({code}_manifest_filepath under
-    cfg.model.validation_ds), reusing the model's already-configured
-    validation_ds template (batch_size, max_duration, etc.) and only
-    swapping manifest_filepath.
-    """
     manifest_key = f"{language_code}_manifest_filepath"
     manifest_path = cfg["model"]["validation_ds"].get(manifest_key)
     if not manifest_path:
@@ -196,25 +138,26 @@ def setup_validation_for_language(model, cfg, language_code: str) -> None:
     model.setup_validation_data(lang_ds_cfg)
 
 
-# import lightning.pytorch as pl
+def _prepare_model_for_evaluation(model_class, model_path: str, cfg):
+    model = model_class.restore_from(model_path, map_location="cpu")
+    model_utils.setup_model_for_validation(model, cfg)
+    return model
 
-# class GradientCheckCallback(pl.Callback):
-#     def __init__(self, check_every_n_steps=10, param_name_filter="linear1"):
-#         self.check_every_n_steps = check_every_n_steps
-#         self.param_name_filter = param_name_filter
 
-#     def on_before_optimizer_step(self, trainer, pl_module, optimizer):
-#         if trainer.global_step % self.check_every_n_steps != 0:
-#             return
-#         found = False
-#         for name, p in pl_module.named_parameters():
-#             if not p.requires_grad or self.param_name_filter not in name:
-#                 continue
-#             found = True
-#             grad_norm = p.grad.norm().item() if p.grad is not None else None
-#             print(f"step {trainer.global_step}: {name} grad_norm={grad_norm}")
-#         if not found:
-#             print(f"step {trainer.global_step}: no parameters matched filter '{self.param_name_filter}'")
+def _attach_ces_from_size(language_results: dict, baseline_language_results: dict, size_baseline: float, size_current: float) -> None:
+    for lang_name, lang_result in language_results.items():
+        baseline_lang = baseline_language_results.get(lang_name)
+        if baseline_lang is None:
+            continue
+
+        evaluator = ASREvaluator()
+        evaluator.cer = lang_result["cer"]
+        lang_result["ces"] = evaluator.compute_ces_from_size(
+            size_baseline=size_baseline,
+            size_quantized=size_current,
+            cer_baseline=baseline_lang["cer"],
+        )
+
 
 def evaluate_model(
     model_path: str,
@@ -222,16 +165,16 @@ def evaluate_model(
     cfg,
     baseline_entry: dict | None,
     language_codes: dict[str, str],
+    existing_result: dict | None = None,
+    save_progress=None,
+    prune: bool = False,
+    prune_ratios: tuple[float, ...] = (),
     quantize: bool = False,
     finetune: bool = False,
+    prune_and_quantize: bool = False,
 ) -> dict:
-    """
-    Loads one model, computes params/MACs once (model-level, language-
-    independent), then for each requested language: rebuilds the
-    validation dataloader from that language's manifest, runs inference,
-    and computes WER/CER (+ CES if a usable baseline is available for
-    that language).
-    """
+    results = existing_result if existing_result is not None else {}
+
     def evaluate_languages_for_model(model, device):
         language_items_local = list(language_codes.items())
         _, first_lang_code_local = language_items_local[0]
@@ -253,81 +196,6 @@ def evaluate_model(
 
         return per_language
 
-    def persist_quantization_after_finetune(q_model, model_class, model_path, cfg, base_config):
-        """
-        QATConfig's documented step="convert" only supports Int4WeightOnlyConfig
-        as a base_config. For other configs (e.g. Int8WeightOnlyConfig, already
-        confirmed to give real size reduction via plain PTQ), there's no
-        supported convert path -- so instead: extract the fine-tuned weights
-        from the fake-quantized model, load them into a FRESH plain model
-        (undoing the FakeQuantizedLinear wrapping), then apply the same
-        plain PTQ quantize_ call already confirmed to work.
-        """
-        finetuned_state_dict = q_model.state_dict()  # fine-tuned weights, still full precision under fake-quant wrapper
-
-        fresh_model = model_class.restore_from(model_path, map_location="cpu")
-        model_utils.setup_model_for_validation(fresh_model, cfg)
-        fresh_model.load_state_dict(finetuned_state_dict, strict=False)  # strict=False: fake-quant wrapper may add/rename some keys
-
-        quantize_model(fresh_model, config=base_config)  # the proven plain-PTQ path
-        return fresh_model
-
-    finetune_cfg = cfg.get("finetune", {})
-    finetune_epochs = int(finetune_cfg.get("epoch", finetune_cfg.get("epochs", 1)))
-    finetune_lr = finetune_cfg.get("lr")
-
-    def finetune_quantized_model(q_model):
-        model_utils.setup_model(q_model, cfg, change_vocab=False)
-        if finetune_lr is not None:
-            optim_cfg = copy.deepcopy(q_model.cfg.optim)
-            with open_dict(optim_cfg):
-                optim_cfg.lr = finetune_lr
-            q_model.setup_optimization(optim_config=optim_cfg)
-
-        ft_trainer = model_utils.create_trainer(cfg)
-        # ft_trainer.callbacks.append(GradientCheckCallback())
-        ft_trainer.fit_loop.max_epochs = finetune_epochs
-        ft_trainer.fit(q_model)
-
-    model = model_class.restore_from(model_path)
-    model_utils.setup_model_for_validation(model, cfg)
-
-    trainer = model_utils.create_trainer(cfg)
-    device = trainer.strategy.root_device if trainer.strategy else torch.device("cpu")
-    model.to(device)
-
-    params = count_parameters(model)
-
-    language_items = list(language_codes.items())
-    _, first_lang_code = language_items[0]
-    setup_validation_for_language(model, cfg, first_lang_code)
-    sample_batch = next(iter(model._validation_dl))
-    macs = estimate_macs(model, sample_batch)
-
-    if not quantize:
-        baseline_languages = (baseline_entry or {}).get("languages", {})
-        baseline_params = (baseline_entry or {}).get("params")
-        baseline_macs = (baseline_entry or {}).get("macs")
-
-        results = {"params": params, "macs": macs, "languages": evaluate_languages_for_model(model, device)}
-
-        for lang_name, lang_code in language_items:
-            lang_baseline = baseline_languages.get(lang_name) or baseline_languages.get(lang_code)
-            if lang_baseline is not None and baseline_params is not None and baseline_macs is not None and macs is not None:
-                evaluator = ASREvaluator()
-                evaluator.cer = results["languages"][lang_name]["cer"]
-                results["languages"][lang_name]["ces"] = evaluator.compute_ces(
-                    params_baseline=baseline_params,
-                    params_pruned=params,
-                    macs_baseline=baseline_macs,
-                    macs_pruned=macs,
-                    cer_baseline=lang_baseline["cer"],
-                )
-            else:
-                print(f"  Missing baseline (params/macs/cer) for language '{lang_name}' -- skipping CES.")
-
-        return results
-
     base_config = {
         "float8_weight_qat": Float8WeightOnlyConfig(),
         "int8_weight_qat": Int8WeightOnlyConfig(),
@@ -348,73 +216,228 @@ def evaluate_model(
         ),
     }
 
-    baseline_size = measure_model_size_bytes(model)
-    baseline_language_results = evaluate_languages_for_model(model, device)
+    def persist_quantization_after_finetune(q_model, template_model, base_quant_config):
+        finetuned_state_dict = q_model.state_dict()
+        fresh_model = copy.deepcopy(template_model)
+        fresh_model.load_state_dict(finetuned_state_dict, strict=False)
+        quantize_model(fresh_model, config=base_quant_config)
+        return fresh_model
 
-    quantization_results = {}
-    for q_name, q_cfg in quantization_configs.items():
-        print(f"  == quantization: {q_name} ==")
-        q_model = model_class.restore_from(model_path, map_location="cpu")
-        model_utils.setup_model_for_validation(q_model, cfg)
+    finetune_cfg = cfg.get("finetune", {})
+    finetune_epochs = int(finetune_cfg.get("epoch", finetune_cfg.get("epochs", 1)))
+    finetune_lr = finetune_cfg.get("lr")
 
-        try:
-            quantize_model(q_model, config=q_cfg)
-            q_model.to(device)
-            q_size = measure_model_size_bytes(q_model)
-            q_lang_results = evaluate_languages_for_model(q_model, device)
+    def finetune_model(model_to_finetune):
+        model_utils.setup_model(model_to_finetune, cfg, change_vocab=False)
+        if finetune_lr is not None:
+            optim_cfg = copy.deepcopy(model_to_finetune.cfg.optim)
+            with open_dict(optim_cfg):
+                optim_cfg.lr = finetune_lr
+            model_to_finetune.setup_optimization(optim_config=optim_cfg)
 
-            for lang_name in q_lang_results:
-                baseline_lang = baseline_language_results.get(lang_name)
-                if baseline_lang is None:
-                    continue
-                evaluator = ASREvaluator()
-                evaluator.cer = q_lang_results[lang_name]["cer"]
-                q_lang_results[lang_name]["ces"] = evaluator.compute_ces_from_size(
-                    size_baseline=baseline_size,
-                    size_quantized=q_size,
-                    cer_baseline=baseline_lang["cer"],
-                )
-                quantization_results[q_name] = {
-                    "languages": q_lang_results,
-                }
+        ft_trainer = model_utils.create_trainer(cfg)
+        ft_trainer.fit_loop.max_epochs = finetune_epochs
+        ft_trainer.fit(model_to_finetune)
 
-            if finetune:
-                finetune_quantized_model(q_model)
-                q_model = persist_quantization_after_finetune(q_model, model_class, model_path, cfg, base_config[q_name])
-                q_model.to(device)
-                q_size = measure_model_size_bytes(q_model)
-                q_ft_lang_results = evaluate_languages_for_model(q_model, device)
-                for lang_name in q_ft_lang_results:
-                    baseline_lang = baseline_language_results.get(lang_name)
-                    if baseline_lang is None:
-                        continue
-                    evaluator = ASREvaluator()
-                    evaluator.cer = q_ft_lang_results[lang_name]["cer"]
-                    q_ft_lang_results[lang_name]["ces"] = evaluator.compute_ces_from_size(
-                        size_baseline=baseline_size,
-                        size_quantized=q_size,
-                        cer_baseline=baseline_lang["cer"],
-                    )
-                quantization_results[q_name]["finetuned"] = {
-                    "languages": q_ft_lang_results,
-                }
-            quantization_results[q_name]['size'] = q_size
-        except Exception as exc:
-            print(f"  Quantization failed for '{q_name}': {exc}")
-            raise exc
-            #quantization_results[q_name] = {"error": str(exc)}
+    model = _prepare_model_for_evaluation(model_class, model_path, cfg)
+    trainer = model_utils.create_trainer(cfg)
+    device = trainer.strategy.root_device if trainer.strategy else torch.device("cpu")
+    model.to(device)
 
-    return {
-        "baseline": {
+    params = count_parameters(model)
+    language_items = list(language_codes.items())
+    _, first_lang_code = language_items[0]
+    setup_validation_for_language(model, cfg, first_lang_code)
+    sample_batch = next(iter(model._validation_dl))
+    macs = estimate_macs(model, sample_batch)
+    model_size = measure_model_size_bytes(model)
+
+    if "baseline" not in results:
+        baseline_language_results = evaluate_languages_for_model(model, device)
+        baseline_result = {
             "params": params,
             "macs": macs,
-            "size": baseline_size,
+            "size": model_size,
             "languages": baseline_language_results,
-        },
-        "quantization": quantization_results,
-    }
+        }
 
-# ---------- entry point ----------
+        baseline_reference_languages = (baseline_entry or {}).get("languages", {})
+        baseline_reference_params = (baseline_entry or {}).get("params")
+        baseline_reference_macs = (baseline_entry or {}).get("macs")
+
+        for lang_name, lang_code in language_items:
+            baseline_lang = baseline_reference_languages.get(lang_name) or baseline_reference_languages.get(lang_code)
+            if (
+                baseline_lang is not None
+                and model_size is not None
+            ):
+                evaluator = ASREvaluator()
+                evaluator.cer = baseline_result["languages"][lang_name]["cer"]
+                baseline_result["languages"][lang_name]["ces"] = evaluator.compute_ces_from_size(
+                    size_baseline=model_size,
+                    size_quantized=model_size,
+                    cer_baseline=baseline_lang["cer"],
+                )
+            elif baseline_entry is not None:
+                print(f"  Missing baseline (params/macs/cer) for language '{lang_name}' -- skipping CES.")
+
+        results["baseline"] = baseline_result
+        if save_progress is not None:
+            save_progress()
+    else:
+        baseline_language_results = results["baseline"]["languages"]
+
+    def score_quantized_languages(language_results: dict, size_current: float) -> None:
+        _attach_ces_from_size(language_results, baseline_language_results, model_size, size_current)
+
+    def score_pruned_languages(language_results: dict, size_current: float) -> None:
+        _attach_ces_from_size(language_results, baseline_language_results, model_size, size_current)
+
+    if prune:
+        pruning_results = results.setdefault("pruning", {})
+        pruning_model = _prepare_model_for_evaluation(model_class, model_path, cfg)
+        pruning_model.to(device)
+        setup_validation_for_language(pruning_model, cfg, first_lang_code)
+        prune_schedule = precompute_prune_dimension(pruning_model, prune_ratios, iterative=True)
+
+        current_model = pruning_model
+        for prune_ratio, prune_dim in zip(prune_ratios, prune_schedule):
+            experiment_key = f"{int(round(prune_ratio * 100))}percent"
+            print(f"  == pruning: {experiment_key} (prune_dim={prune_dim}) ==")
+            prune_entry = pruning_results.setdefault(experiment_key, {})
+
+            current_model = prune_ffns(
+                current_model,
+                sample_batch[0].to(device),
+                sample_batch[1].to(device),
+                prune_dim=prune_dim,
+            )
+            current_model.to(device)
+
+            if "languages" not in prune_entry:
+                prune_params = count_parameters(current_model)
+                prune_size = measure_model_size_bytes(current_model)
+                prune_macs = estimate_macs(current_model, sample_batch)
+                prune_lang_results = evaluate_languages_for_model(current_model, device)
+                score_pruned_languages(prune_lang_results, prune_size)
+
+                prune_entry.update({
+                    "params": prune_params,
+                    "macs": prune_macs,
+                    "size": prune_size,
+                    "languages": prune_lang_results,
+                })
+                if save_progress is not None:
+                    save_progress()
+
+            if finetune:
+                if "finetuned" not in prune_entry:
+                    finetune_model(current_model)
+                    prune_ft_params = count_parameters(current_model)
+                    prune_ft_size = measure_model_size_bytes(current_model)
+                    prune_ft_macs = estimate_macs(current_model, sample_batch)
+                    prune_ft_lang_results = evaluate_languages_for_model(current_model, device)
+                    score_pruned_languages(prune_ft_lang_results, prune_ft_size)
+                    prune_entry["finetuned"] = {
+                        "params": prune_ft_params,
+                        "macs": prune_ft_macs,
+                        "size": prune_ft_size,
+                        "languages": prune_ft_lang_results,
+                    }
+                    if save_progress is not None:
+                        save_progress()
+
+            if prune_and_quantize:
+                prune_entry.setdefault("quantization", {})
+                for q_name, q_cfg in quantization_configs.items():
+                    print(f"    == pruning+quantization: {q_name} ==")
+                    if q_name in prune_entry["quantization"] and (
+                        "languages" in prune_entry["quantization"][q_name]
+                        and (not finetune or "finetuned" in prune_entry["quantization"][q_name])
+                    ):
+                        continue
+
+                    q_model = copy.deepcopy(current_model)
+                    q_template = copy.deepcopy(current_model)
+                    quantize_model(q_model, config=q_cfg)
+                    q_model.to(device)
+
+                    q_entry = prune_entry["quantization"].setdefault(q_name, {})
+                    if "languages" not in q_entry:
+                        q_size = measure_model_size_bytes(q_model)
+                        q_lang_results = evaluate_languages_for_model(q_model, device)
+                        score_quantized_languages(q_lang_results, q_size)
+
+                        q_entry.update({
+                            "languages": q_lang_results,
+                            "size": q_size,
+                        })
+                        if save_progress is not None:
+                            save_progress()
+
+                    if finetune:
+                        if "finetuned" not in q_entry:
+                            finetune_model(q_model)
+                            q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
+                            q_model.to(device)
+
+                            q_ft_size = measure_model_size_bytes(q_model)
+                            q_ft_lang_results = evaluate_languages_for_model(q_model, device)
+                            score_quantized_languages(q_ft_lang_results, q_ft_size)
+                            q_entry["finetuned"] = {
+                                "languages": q_ft_lang_results,
+                                "size": q_ft_size,
+                            }
+                            if save_progress is not None:
+                                save_progress()
+
+    if quantize and not prune_and_quantize:
+        quantization_results = results.setdefault("quantization", {})
+        for q_name, q_cfg in quantization_configs.items():
+            print(f"  == quantization: {q_name} ==")
+            if q_name in quantization_results and (
+                "languages" in quantization_results[q_name]
+                and (not finetune or "finetuned" in quantization_results[q_name])
+            ):
+                continue
+
+            q_model = _prepare_model_for_evaluation(model_class, model_path, cfg)
+            q_template = copy.deepcopy(q_model)
+
+            quantize_model(q_model, config=q_cfg)
+            q_model.to(device)
+
+            q_entry = quantization_results.setdefault(q_name, {})
+            if "languages" not in q_entry:
+                q_size = measure_model_size_bytes(q_model)
+                q_lang_results = evaluate_languages_for_model(q_model, device)
+                score_quantized_languages(q_lang_results, q_size)
+
+                q_entry.update({
+                    "languages": q_lang_results,
+                    "size": q_size,
+                })
+                if save_progress is not None:
+                    save_progress()
+
+            if finetune:
+                if "finetuned" not in q_entry:
+                    finetune_model(q_model)
+                    q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
+                    q_model.to(device)
+
+                    q_ft_size = measure_model_size_bytes(q_model)
+                    q_ft_lang_results = evaluate_languages_for_model(q_model, device)
+                    score_quantized_languages(q_ft_lang_results, q_ft_size)
+                    q_entry["finetuned"] = {
+                        "languages": q_ft_lang_results,
+                        "size": q_ft_size,
+                    }
+                    if save_progress is not None:
+                        save_progress()
+
+    return results
+
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate one or more ASR models (WER/CER/CES) across one or more languages.")
@@ -422,38 +445,52 @@ def main():
     parser.add_argument("--model_class", required=True, help="Dotted path to the model class.")
     parser.add_argument("--config", required=True, help="Path to the NeMo config (for validation dataset setup).")
     parser.add_argument("--languages", nargs="+", required=True,
-                         help="Language names or codes to evaluate against (must match LANGUAGES and "
-                              "have a corresponding {code}_manifest_filepath in config.model.validation_ds).")
+                        help="Language names or codes to evaluate against (must match LANGUAGES and have a corresponding {code}_manifest_filepath in config.model.validation_ds).")
     parser.add_argument("--baseline_file", default=None,
-                         help="Optional JSON: {model_filename: {params, macs, languages: {lang: {cer, wer, combined_error}}}}.")
+                        help="Optional JSON: {model_filename: {params, macs, languages: {lang: {cer, wer, combined_error}}}}.")
     parser.add_argument("--output_dir", required=True, help="Directory to save results.json into.")
+    parser.add_argument("--prune", action="store_true", help="Iteratively prune feed-forward layers before evaluation.")
+    parser.add_argument("--prune_ratios", nargs="+", type=float, default=[0.1, 0.2, 0.5],
+                        help="Pruning ratios to apply iteratively, e.g. 0.1 0.2 0.5.")
     parser.add_argument("--quantize", action="store_true", help="Apply QAT prepare-time fake quantization before evaluation.")
     parser.add_argument("--finetune", action="store_true", help="After QAT prepare, fine-tune each model using cfg.finetune before re-evaluation.")
+    parser.add_argument("--prune_and_quantize", action="store_true",
+                        help="Quantize each pruned model before its first evaluation and finetuning.")
     args = parser.parse_args()
+
+    if args.prune_and_quantize and not args.prune:
+        raise ValueError("--prune_and_quantize requires --prune.")
 
     cfg = OmegaConf.load(args.config)
     model_class = model_utils.resolve_model_class(args.model_class)
     baseline_data = load_json_file(args.baseline_file) if args.baseline_file else {}
     language_codes = resolve_language_codes(args.languages)
 
-    results = {}
+    output_path = str(Path(args.output_dir) / "results.json")
+    results = load_json_file(output_path) if Path(output_path).exists() else {}
+
     for model_path in args.model_paths:
         model_filename = Path(model_path).name
         print(f"\n=== Evaluating {model_filename} ===")
         baseline_entry = baseline_data.get(model_filename) if args.baseline_file else None
+        model_results = results.setdefault(model_filename, {})
         results[model_filename] = evaluate_model(
             model_path,
             model_class,
             cfg,
             baseline_entry,
             language_codes,
+            existing_result=model_results,
+            save_progress=lambda: save_json_file(results, output_path),
+            prune=args.prune,
+            prune_ratios=tuple(args.prune_ratios),
             quantize=args.quantize,
             finetune=args.finetune,
+            prune_and_quantize=args.prune_and_quantize,
         )
-
-    output_path = str(Path(args.output_dir) / "results.json")
-    save_json_file(results, output_path)
+        save_json_file(results, output_path)
     print(f"\nSaved results to {output_path}")
+
 
 if __name__ == "__main__":
     main()

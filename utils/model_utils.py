@@ -5,6 +5,7 @@ from huggingface_hub import login as hf_login
 import os
 from pathlib import Path
 import sys
+import torch.nn as nn
 from importlib import import_module
 from omegaconf import DictConfig, OmegaConf, open_dict
 import lightning.pytorch as pl
@@ -153,4 +154,19 @@ def run_model_forward(model, signal, signal_len):
     else:
         log_probs, encoded_len, _ = model.forward(input_signal=signal, input_signal_length=signal_len)
         return log_probs, encoded_len
-	
+
+
+class _KwargsForwardWrapper(nn.Module):
+    """
+    thop calls the profiled module positionally (model(*inputs)), but
+    NeMo's forward() is decorated with @typecheck() and requires
+    input_signal=/input_signal_length= as keywords. This thin wrapper
+    accepts positional args from thop and forwards them as kwargs to the
+    real model.
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, input_signal, input_signal_length):
+        return self.model.forward(input_signal=input_signal, input_signal_length=input_signal_length)
