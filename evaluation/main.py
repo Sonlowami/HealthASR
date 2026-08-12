@@ -432,7 +432,6 @@ def evaluate_model(
                 continue
 
             q_model = _prepare_model_for_evaluation(model_class, model_path, cfg)
-            q_template = clone_model_via_disk(q_model)
 
             quantize_model(q_model, config=q_cfg)
             q_model.to(device)
