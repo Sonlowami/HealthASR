@@ -462,11 +462,28 @@ def evaluate_model(
 
                     if finetune:
                         if "finetuned" not in q_entry:
-                            print(type(q_model.blank_id))
-                            print(q_model.blank_id)
-                            from nemo.collections.asr.models import EncDecCTCModelBPE
-                            print("blank_id" in q_model.__dict__)  # True would mean it's an INSTANCE attr, not the class property
-                            print(type(EncDecCTCModelBPE.__dict__.get("blank_id")))  # what the class itself defines
+                            q_model = clone_model_via_disk(current_model)
+
+                            print("\n===== AFTER CLONE =====")
+                            print("type:", type(q_model))
+                            print("MRO:", type(q_model).__mro__)
+                            print("instance has blank_id:", "blank_id" in q_model.__dict__)
+
+                            if "blank_id" in q_model.__dict__:
+                                print("instance blank_id:", repr(q_model.__dict__["blank_id"]))
+                                print("instance blank_id type:", type(q_model.__dict__["blank_id"]))
+
+                            for cls in type(q_model).__mro__:
+                                if "blank_id" in cls.__dict__:
+                                    value = cls.__dict__["blank_id"]
+                                    print(
+                                        "FOUND blank_id in class:",
+                                        cls,
+                                        "value:", repr(value),
+                                        "type:", type(value),
+                                    )
+
+                            print("========================\n")
                             finetune_model(q_model)
                             q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
                             q_model.to(device)
