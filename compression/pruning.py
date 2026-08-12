@@ -152,7 +152,9 @@ def prune_ffns(
         # ------------------------------------------------------------
         # Build a fresh dependency graph.
         # ------------------------------------------------------------
-
+        # we will get a CUDA OOM if we build a dependency graph with the entrire batch
+        signal = signal[:1]
+        signal_len = signal_len[:1]
         wrapped = _KwargsForwardWrapper(model)
 
         DG = tp.DependencyGraph().build_dependency(
