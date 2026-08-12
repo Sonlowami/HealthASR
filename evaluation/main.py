@@ -373,6 +373,21 @@ def evaluate_model(
 
         ctc_greedy_decoding.GreedyBatchedCTCInfer.__init__ = debug_greedy_init
 
+        print("NeMo tokenizer:", type(model_to_finetune.tokenizer))
+        print("tokenizer.__dict__:", model_to_finetune.tokenizer.__dict__)
+
+        sp = getattr(model_to_finetune.tokenizer, "tokenizer", None)
+        print("underlying tokenizer:", type(sp))
+
+        if sp is not None:
+            print("sp.vocab_size:", repr(sp.vocab_size))
+            print("sp.vocab_size():", sp.vocab_size())
+
+        import inspect
+        from nemo.collections.asr.parts.submodules import ctc_decoding
+        print(inspect.getsource(ctc_decoding.CTCBPEDecoding.__init__))
+        print(inspect.getsource(ctc_decoding.CTCDecoding.__init__))
+
         model_utils.setup_model(model_to_finetune, cfg, change_vocab=False)
         if finetune_lr is not None:
             optim_cfg = copy.deepcopy(model_to_finetune.cfg.optim)
