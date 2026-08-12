@@ -432,6 +432,9 @@ def evaluate_model(
                         continue
 
                     try:
+                        print([k for k in current_model.__dict__.keys() if "valid" in k.lower() or "train" in k.lower()])
+                        print(wrapt.__file__)
+                        print(type(current_model._validation_dl.collate_fn).__mro__)
                         dill.dumps(current_model)
                         print("dill.dumps(current_model) succeeded?! (unexpected)")
                     except Exception as exc:
