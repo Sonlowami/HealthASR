@@ -41,6 +41,29 @@ def load_json_file(path: str) -> dict:
         return json.load(f)
 import wrapt
 
+def bisect_pickle_failure(obj, path="model", max_depth=8):
+    """
+    Same bisection technique used earlier for deepcopy: try pickling
+    (via dill, matching clone_model_via_disk's actual call) each
+    attribute individually, recurse into whichever one fails. Pinpoints
+    the exact wrapt-wrapped attribute rather than guessing.
+    """
+    if max_depth == 0:
+        print(f"{path}: max depth reached, stopping")
+        return
+
+    d = getattr(obj, "__dict__", None)
+    if not isinstance(d, dict):
+        print(f"{path}: no __dict__, can't narrow further (leaf-level failure)")
+        return
+
+    for key, value in d.items():
+        try:
+            dill.dumps(value)
+        except Exception as exc:
+            print(f"FAILS: {path}.{key} = {type(value)} -- {type(exc).__name__}: {exc}")
+            bisect_pickle_failure(value, f"{path}.{key}", max_depth - 1)
+
 def strip_wrapt_proxies(model):
     """
     Generically strip any wrapt.ObjectProxy-derived instance attribute
@@ -408,6 +431,12 @@ def evaluate_model(
                     ):
                         continue
 
+                    try:
+                        dill.dumps(current_model)
+                        print("dill.dumps(current_model) succeeded?! (unexpected)")
+                    except Exception as exc:
+                        print(f"Confirmed: dill.dumps(current_model) fails with {type(exc).__name__}: {exc}")
+                        bisect_pickle_failure(current_model)
                     q_model = clone_model_via_disk(current_model)
                     q_template = clone_model_via_disk(current_model)
                     quantize_model(q_model, config=q_cfg)
