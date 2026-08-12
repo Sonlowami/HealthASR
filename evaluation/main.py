@@ -58,8 +58,11 @@ def inspect_model_tokenizer(model, label):
           repr(tok.tokenizer.vocab_size),
           type(tok.tokenizer.vocab_size))
 
-    print("underlying vocab_size():",
-          tok.tokenizer.vocab_size())
+    print("underlying vocab_size():")
+    try:
+        tok.tokenizer.vocab_size()
+    except Exception as exc:
+        print(f"Error occurred while accessing vocab_size(): {type(exc).__name__}: {exc}")
 
     print("original_vocab_size:",
           getattr(tok, "original_vocab_size", None))
