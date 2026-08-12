@@ -41,53 +41,37 @@ def load_json_file(path: str) -> dict:
         return json.load(f)
 import wrapt
 
-def inspect_greedy_decoder(model, label):
+def inspect_model_tokenizer(model, label):
     print(f"\n===== {label} =====")
 
-    decoding = model.decoding
-    greedy = decoding.decoding
+    tok = model.tokenizer
 
-    print("CTC decoding type:", type(decoding))
-    print("Greedy type:", type(greedy))
+    print("model.tokenizer:", type(tok))
+    print("model.tokenizer.vocab_size:",
+          repr(tok.vocab_size),
+          type(tok.vocab_size))
 
-    print("\nGreedy instance blank_id:")
-    print("  in __dict__:", "blank_id" in greedy.__dict__)
+    print("model.tokenizer.tokenizer:",
+          type(tok.tokenizer))
 
-    if "blank_id" in greedy.__dict__:
-        print("  value:", repr(greedy.__dict__["blank_id"]))
-        print("  type:", type(greedy.__dict__["blank_id"]))
+    print("underlying vocab_size:",
+          repr(tok.tokenizer.vocab_size),
+          type(tok.tokenizer.vocab_size))
 
-    try:
-        value = greedy.blank_id
-        print("  greedy.blank_id:", repr(value))
-        print("  greedy.blank_id type:", type(value))
-        print("  callable:", callable(value))
-    except Exception as exc:
-        print("  greedy.blank_id FAILED:", repr(exc))
+    print("underlying vocab_size():",
+          tok.tokenizer.vocab_size())
 
-    print("\nGreedy _blank_index:")
-    print("  in __dict__:", "_blank_index" in greedy.__dict__)
+    print("original_vocab_size:",
+          getattr(tok, "original_vocab_size", None))
 
-    if "_blank_index" in greedy.__dict__:
-        print("  value:", repr(greedy.__dict__["_blank_index"]))
-        print("  type:", type(greedy.__dict__["_blank_index"]))
+    print("model.decoding:", type(model.decoding))
+    print("model.decoding.decoding:", type(model.decoding.decoding))
 
-    print("\nClass hierarchy:")
-    for cls in type(greedy).__mro__:
-        if "blank_id" in cls.__dict__ or "_blank_index" in cls.__dict__:
-            print(" ", cls)
-            if "blank_id" in cls.__dict__:
-                print(
-                    "    blank_id:",
-                    repr(cls.__dict__["blank_id"]),
-                    type(cls.__dict__["blank_id"]),
-                )
-            if "_blank_index" in cls.__dict__:
-                print(
-                    "    _blank_index:",
-                    repr(cls.__dict__["_blank_index"]),
-                    type(cls.__dict__["_blank_index"]),
-                )
+    print("decoding.__dict__:")
+    for k, v in model.decoding.__dict__.items():
+        if "blank" in k.lower() or "token" in k.lower() or "vocab" in k.lower():
+            print(" ", k, "=", repr(v), type(v))
+
 
 def bisect_pickle_failure(obj, path="model", max_depth=8):
     """
@@ -352,42 +336,6 @@ def evaluate_model(
     finetune_lr = finetune_cfg.get("lr")
 
     def finetune_model(model_to_finetune):
-        import nemo.collections.asr.parts.submodules.ctc_greedy_decoding as ctc_greedy_decoding
-
-        _original_greedy_init = ctc_greedy_decoding.GreedyBatchedCTCInfer.__init__
-
-
-        def debug_greedy_init(self, *args, **kwargs):
-            print("\n========== NEW GreedyBatchedCTCInfer ==========")
-            print("args:", args)
-            print("kwargs:", kwargs)
-
-            blank_id = kwargs.get("blank_id", "<not supplied>")
-
-            print("blank_id:", repr(blank_id))
-            print("blank_id type:", type(blank_id))
-            print("blank_id callable:", callable(blank_id))
-
-            return _original_greedy_init(self, *args, **kwargs)
-
-
-        ctc_greedy_decoding.GreedyBatchedCTCInfer.__init__ = debug_greedy_init
-
-        print("NeMo tokenizer:", type(model_to_finetune.tokenizer))
-        print("tokenizer.__dict__:", model_to_finetune.tokenizer.__dict__)
-
-        sp = getattr(model_to_finetune.tokenizer, "tokenizer", None)
-        print("underlying tokenizer:", type(sp))
-
-        if sp is not None:
-            print("sp.vocab_size:", repr(sp.vocab_size))
-            print("sp.vocab_size():", sp.vocab_size())
-
-        import inspect
-        from nemo.collections.asr.parts.submodules import ctc_decoding
-        print(inspect.getsource(ctc_decoding.CTCBPEDecoding.__init__))
-        print(inspect.getsource(ctc_decoding.CTCDecoding.__init__))
-
         model_utils.setup_model(model_to_finetune, cfg, change_vocab=False)
         if finetune_lr is not None:
             optim_cfg = copy.deepcopy(model_to_finetune.cfg.optim)
@@ -516,17 +464,16 @@ def evaluate_model(
                         and (not finetune or "finetuned" in prune_entry["quantization"][q_name])
                     ):
                         continue
+                    restored = model_class.restore_from(model_path, map_location="cpu")
 
-                    try:
-                        print([k for k in current_model.__dict__.keys() if "valid" in k.lower() or "train" in k.lower()])
-                        print(wrapt.__file__)
-                        print(type(current_model._validation_dl.collate_fn).__mro__)
-                        dill.dumps(current_model)
-                        print("dill.dumps(current_model) succeeded?! (unexpected)")
-                    except Exception as exc:
-                        print(f"Confirmed: dill.dumps(current_model) fails with {type(exc).__name__}: {exc}")
-                        bisect_pickle_failure(current_model)
+                    inspect_model_tokenizer(restored, "RESTORED BEFORE setup_model")
+
+                    model_utils.setup_model(restored, cfg, change_vocab=False)
+
+                    inspect_model_tokenizer(restored, "RESTORED AFTER setup_model")
+
                     q_model = clone_model_via_disk(current_model)
+                    inspect_model_tokenizer(q_model, "TRANSFORMED BEFORE setup_model")
                     q_template = clone_model_via_disk(current_model)
                     quantize_model(q_model, config=q_cfg)
                     q_model.to(device)
