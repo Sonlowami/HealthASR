@@ -39,65 +39,6 @@ except ImportError as exc:
 def load_json_file(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
-import wrapt
-
-def inspect_model_tokenizer(model, label):
-    print(f"\n===== {label} =====")
-
-    tok = model.tokenizer
-
-    print("model.tokenizer:", type(tok))
-    print("model.tokenizer.vocab_size:",
-          repr(tok.vocab_size),
-          type(tok.vocab_size))
-
-    print("model.tokenizer.tokenizer:",
-          type(tok.tokenizer))
-
-    print("underlying vocab_size:",
-          repr(tok.tokenizer.vocab_size),
-          type(tok.tokenizer.vocab_size))
-
-    print("underlying vocab_size():")
-    try:
-        tok.tokenizer.vocab_size()
-    except Exception as exc:
-        print(f"Error occurred while accessing vocab_size(): {type(exc).__name__}: {exc}")
-
-    print("original_vocab_size:",
-          getattr(tok, "original_vocab_size", None))
-
-    print("model.decoding:", type(model.decoding))
-    print("model.decoding.decoding:", type(model.decoding.decoding))
-
-    print("decoding.__dict__:")
-    for k, v in model.decoding.__dict__.items():
-        if "blank" in k.lower() or "token" in k.lower() or "vocab" in k.lower():
-            print(" ", k, "=", repr(v), type(v))
-
-
-def bisect_pickle_failure(obj, path="model", max_depth=8):
-    """
-    Same bisection technique used earlier for deepcopy: try pickling
-    (via dill, matching clone_model_via_disk's actual call) each
-    attribute individually, recurse into whichever one fails. Pinpoints
-    the exact wrapt-wrapped attribute rather than guessing.
-    """
-    if max_depth == 0:
-        print(f"{path}: max depth reached, stopping")
-        return
-
-    d = getattr(obj, "__dict__", None)
-    if not isinstance(d, dict):
-        print(f"{path}: no __dict__, can't narrow further (leaf-level failure)")
-        return
-
-    for key, value in d.items():
-        try:
-            dill.dumps(value)
-        except Exception as exc:
-            print(f"FAILS: {path}.{key} = {type(value)} -- {type(exc).__name__}: {exc}")
-            bisect_pickle_failure(value, f"{path}.{key}", max_depth - 1)
 
 def is_wrapt_proxy(value) -> bool:
     """
@@ -378,8 +319,6 @@ def evaluate_model(
         }
 
         baseline_reference_languages = (baseline_entry or {}).get("languages", {})
-        baseline_reference_params = (baseline_entry or {}).get("params")
-        baseline_reference_macs = (baseline_entry or {}).get("macs")
 
         for lang_name, lang_code in language_items:
             baseline_lang = baseline_reference_languages.get(lang_name) or baseline_reference_languages.get(lang_code)
@@ -472,35 +411,8 @@ def evaluate_model(
                         and (not finetune or "finetuned" in prune_entry["quantization"][q_name])
                     ):
                         continue
-                    restored = model_class.restore_from(model_path, map_location="cpu")
-
-                    cloned = clone_model_via_disk(restored)
-
-                    print("RESTORED:")
-                    print(type(restored.tokenizer.tokenizer.vocab_size))
-                    print(repr(restored.tokenizer.tokenizer.vocab_size))
-
-                    print("\nCLONED:")
-                    print(type(cloned.tokenizer.tokenizer.vocab_size))
-                    print(repr(cloned.tokenizer.tokenizer.vocab_size))
-
-                    print("restored tokenizer id:",
-                        id(restored.tokenizer.tokenizer))
-
-                    print("cloned tokenizer id:",
-                        id(cloned.tokenizer.tokenizer))
-
-                    print("restored tokenizer dict:")
-                    print(restored.tokenizer.tokenizer.__dict__)
-
-                    print("cloned tokenizer dict:")
-                    print(cloned.tokenizer.tokenizer.__dict__)
-
-                    print(type(restored.tokenizer.tokenizer))
-                    print(type(cloned.tokenizer.tokenizer))
 
                     q_model = clone_model_via_disk(current_model)
-                    inspect_model_tokenizer(q_model, "TRANSFORMED BEFORE setup_model")
                     q_template = clone_model_via_disk(current_model)
                     quantize_model(q_model, config=q_cfg)
                     q_model.to(device)
@@ -521,8 +433,6 @@ def evaluate_model(
                     if finetune:
                         if "finetuned" not in q_entry:
                             q_model = clone_model_via_disk(current_model)
-
-                            fresh = model_class.restore_from(model_path, map_location="cpu")
 
                             finetune_model(q_model)
                             q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
