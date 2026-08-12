@@ -352,6 +352,27 @@ def evaluate_model(
     finetune_lr = finetune_cfg.get("lr")
 
     def finetune_model(model_to_finetune):
+        import nemo.collections.asr.parts.submodules.ctc_greedy_decoding as ctc_greedy_decoding
+
+        _original_greedy_init = ctc_greedy_decoding.GreedyBatchedCTCInfer.__init__
+
+
+        def debug_greedy_init(self, *args, **kwargs):
+            print("\n========== NEW GreedyBatchedCTCInfer ==========")
+            print("args:", args)
+            print("kwargs:", kwargs)
+
+            blank_id = kwargs.get("blank_id", "<not supplied>")
+
+            print("blank_id:", repr(blank_id))
+            print("blank_id type:", type(blank_id))
+            print("blank_id callable:", callable(blank_id))
+
+            return _original_greedy_init(self, *args, **kwargs)
+
+
+        ctc_greedy_decoding.GreedyBatchedCTCInfer.__init__ = debug_greedy_init
+
         model_utils.setup_model(model_to_finetune, cfg, change_vocab=False)
         if finetune_lr is not None:
             optim_cfg = copy.deepcopy(model_to_finetune.cfg.optim)
@@ -513,10 +534,6 @@ def evaluate_model(
                             q_model = clone_model_via_disk(current_model)
 
                             fresh = model_class.restore_from(model_path, map_location="cpu")
-
-                            inspect_greedy_decoder(fresh, "FRESH")
-                            inspect_greedy_decoder(current_model, "CURRENT")
-                            inspect_greedy_decoder(q_model, "CLONED")
 
                             finetune_model(q_model)
                             q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
