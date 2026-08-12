@@ -41,6 +41,54 @@ def load_json_file(path: str) -> dict:
         return json.load(f)
 import wrapt
 
+def inspect_greedy_decoder(model, label):
+    print(f"\n===== {label} =====")
+
+    decoding = model.decoding
+    greedy = decoding.decoding
+
+    print("CTC decoding type:", type(decoding))
+    print("Greedy type:", type(greedy))
+
+    print("\nGreedy instance blank_id:")
+    print("  in __dict__:", "blank_id" in greedy.__dict__)
+
+    if "blank_id" in greedy.__dict__:
+        print("  value:", repr(greedy.__dict__["blank_id"]))
+        print("  type:", type(greedy.__dict__["blank_id"]))
+
+    try:
+        value = greedy.blank_id
+        print("  greedy.blank_id:", repr(value))
+        print("  greedy.blank_id type:", type(value))
+        print("  callable:", callable(value))
+    except Exception as exc:
+        print("  greedy.blank_id FAILED:", repr(exc))
+
+    print("\nGreedy _blank_index:")
+    print("  in __dict__:", "_blank_index" in greedy.__dict__)
+
+    if "_blank_index" in greedy.__dict__:
+        print("  value:", repr(greedy.__dict__["_blank_index"]))
+        print("  type:", type(greedy.__dict__["_blank_index"]))
+
+    print("\nClass hierarchy:")
+    for cls in type(greedy).__mro__:
+        if "blank_id" in cls.__dict__ or "_blank_index" in cls.__dict__:
+            print(" ", cls)
+            if "blank_id" in cls.__dict__:
+                print(
+                    "    blank_id:",
+                    repr(cls.__dict__["blank_id"]),
+                    type(cls.__dict__["blank_id"]),
+                )
+            if "_blank_index" in cls.__dict__:
+                print(
+                    "    _blank_index:",
+                    repr(cls.__dict__["_blank_index"]),
+                    type(cls.__dict__["_blank_index"]),
+                )
+
 def bisect_pickle_failure(obj, path="model", max_depth=8):
     """
     Same bisection technique used earlier for deepcopy: try pickling
@@ -466,19 +514,10 @@ def evaluate_model(
 
                             fresh = model_class.restore_from(model_path, map_location="cpu")
 
-                            cloned = clone_model_via_disk(current_model)
+                            inspect_greedy_decoder(fresh, "FRESH")
+                            inspect_greedy_decoder(current_model, "CURRENT")
+                            inspect_greedy_decoder(q_model, "CLONED")
 
-                            print("FRESH")
-                            print("  decoding:", type(fresh.decoding))
-                            print("  decoding dict:", fresh.decoding.__dict__)
-
-                            print("\nCURRENT")
-                            print("  decoding:", type(current_model.decoding))
-                            print("  decoding dict:", current_model.decoding.__dict__)
-
-                            print("\nCLONED")
-                            print("  decoding:", type(cloned.decoding))
-                            print("  decoding dict:", cloned.decoding.__dict__)
                             finetune_model(q_model)
                             q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
                             q_model.to(device)
