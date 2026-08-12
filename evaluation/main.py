@@ -462,6 +462,11 @@ def evaluate_model(
 
                     if finetune:
                         if "finetuned" not in q_entry:
+                            print(type(q_model.blank_id))
+                            print(q_model.blank_id)
+                            from nemo.collections.asr.models import EncDecCTCModelBPE
+                            print("blank_id" in q_model.__dict__)  # True would mean it's an INSTANCE attr, not the class property
+                            print(type(EncDecCTCModelBPE.__dict__.get("blank_id")))  # what the class itself defines
                             finetune_model(q_model)
                             q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
                             q_model.to(device)
