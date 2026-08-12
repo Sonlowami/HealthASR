@@ -26,6 +26,15 @@ try:
 except ImportError:
     thop_profile = None
 
+try:
+    import dill
+except ImportError as exc:
+    raise ImportError(
+        "dill is required for clone_model_via_disk (stdlib pickle can't "
+        "serialize NeMo's decorator-wrapped methods, e.g. FilterbankFeatures.forward). "
+        "Install with: pip install dill"
+    ) from exc
+
 
 def load_json_file(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -45,8 +54,8 @@ def clone_model_via_disk(model):
     try:
         with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
             tmp_path = tmp.name
-        torch.save(model, tmp_path)
-        cloned_model = torch.load(tmp_path, weights_only=False)
+        torch.save(model, tmp_path, pickle_module=dill)
+        cloned_model = torch.load(tmp_path, pickle_module=dill, weight_only=False)
     finally:
         if tmp_path is not None:
             Path(tmp_path).unlink(missing_ok=True)
