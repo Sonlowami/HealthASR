@@ -127,6 +127,7 @@ def clone_model_via_disk(model):
     We cannot do copy.deepcopy(model) because @wrapt decorators do not implement __deepcopy__
     and will raise an error. Instead, we save the model to a temporary file and load a copy of it.
     """
+    tokenizer = model.tokenizer
     removed = strip_wrapt_proxies(model)
 
     tmp_path = None
@@ -140,6 +141,10 @@ def clone_model_via_disk(model):
             Path(tmp_path).unlink(missing_ok=True)
         for attr, value in removed.items():
             model.__dict__[attr] = value
+    # cloned model overwrites the tokenizer with an instance lacking vocab_size, get_vocab method and all_special_tokens.
+    # If we don't restore the tokenizer, we get a crazy error to debug that says "TypeError: unsupported operand type(s) for +: 'method' and 'int'"
+    # It is a nasty error to debug as all symptoms point to nemo internals instead of here.
+    cloned_model.tokenizer = tokenizer
 
     return cloned_model
 
