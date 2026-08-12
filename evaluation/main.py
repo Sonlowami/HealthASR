@@ -469,11 +469,30 @@ def evaluate_model(
                         continue
                     restored = model_class.restore_from(model_path, map_location="cpu")
 
-                    inspect_model_tokenizer(restored, "RESTORED BEFORE setup_model")
+                    cloned = clone_model_via_disk(restored)
 
-                    model_utils.setup_model(restored, cfg, change_vocab=False)
+                    print("RESTORED:")
+                    print(type(restored.tokenizer.tokenizer.vocab_size))
+                    print(repr(restored.tokenizer.tokenizer.vocab_size))
 
-                    inspect_model_tokenizer(restored, "RESTORED AFTER setup_model")
+                    print("\nCLONED:")
+                    print(type(cloned.tokenizer.tokenizer.vocab_size))
+                    print(repr(cloned.tokenizer.tokenizer.vocab_size))
+
+                    print("restored tokenizer id:",
+                        id(restored.tokenizer.tokenizer))
+
+                    print("cloned tokenizer id:",
+                        id(cloned.tokenizer.tokenizer))
+
+                    print("restored tokenizer dict:")
+                    print(restored.tokenizer.tokenizer.__dict__)
+
+                    print("cloned tokenizer dict:")
+                    print(cloned.tokenizer.tokenizer.__dict__)
+
+                    print(type(restored.tokenizer.tokenizer))
+                    print(type(cloned.tokenizer.tokenizer))
 
                     q_model = clone_model_via_disk(current_model)
                     inspect_model_tokenizer(q_model, "TRANSFORMED BEFORE setup_model")
