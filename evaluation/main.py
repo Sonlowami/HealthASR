@@ -31,6 +31,36 @@ def load_json_file(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+def clone_model_via_disk(model):
+    """
+    We cannot do copy.deepcopy(model) because @wrapt decorators do not implement __deepcopy__
+    and will raise an error. Instead, we save the model to a temporary file and load a copy of it.
+    """
+    instance_overrides = {}
+    for attr in ("training_step", "trainer", "log"):
+        if attr in model.__dict__:
+            instance_overrides[attr] = model.__dict__.pop(attr)
+
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
+            tmp_path = tmp.name
+        torch.save(model, tmp_path)
+        cloned_model = torch.load(tmp_path, weights_only=False)
+    finally:
+        if tmp_path is not None:
+            Path(tmp_path).unlink(missing_ok=True)
+        # Restore on the ORIGINAL regardless of success/failure above.
+        for attr, value in instance_overrides.items():
+            model.__dict__[attr] = value
+
+    # Re-apply the same overrides to the clone too, so its behavior
+    # matches the original as closely as possible (e.g. still
+    # trainer.fit()-able normally afterward if needed).
+    for attr, value in instance_overrides.items():
+        cloned_model.__dict__[attr] = value
+
+    return cloned_model
 
 def save_json_file(data: dict, path: str) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -218,7 +248,7 @@ def evaluate_model(
 
     def persist_quantization_after_finetune(q_model, template_model, base_quant_config):
         finetuned_state_dict = q_model.state_dict()
-        fresh_model = copy.deepcopy(template_model)
+        fresh_model = clone_model_via_disk(template_model)
         fresh_model.load_state_dict(finetuned_state_dict, strict=False)
         quantize_model(fresh_model, config=base_quant_config)
         return fresh_model
@@ -357,8 +387,8 @@ def evaluate_model(
                     ):
                         continue
 
-                    q_model = copy.deepcopy(current_model)
-                    q_template = copy.deepcopy(current_model)
+                    q_model = clone_model_via_disk(current_model)
+                    q_template = clone_model_via_disk(current_model)
                     quantize_model(q_model, config=q_cfg)
                     q_model.to(device)
 
@@ -402,7 +432,7 @@ def evaluate_model(
                 continue
 
             q_model = _prepare_model_for_evaluation(model_class, model_path, cfg)
-            q_template = copy.deepcopy(q_model)
+            q_template = clone_model_via_disk(q_model)
 
             quantize_model(q_model, config=q_cfg)
             q_model.to(device)
