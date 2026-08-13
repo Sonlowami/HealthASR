@@ -137,6 +137,7 @@ def get_hypotheses(model, log_probs_or_encoded, encoded_len):
             encoded_lengths=encoded_len,
             return_hypotheses=True,
         )
+        best_hyp = model.decoding.decode_hypothesis(best_hyp)
         return best_hyp
     else:
         return model.decoding.ctc_decoder_predictions_tensor(log_probs_or_encoded, encoded_len)
