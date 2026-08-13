@@ -120,10 +120,11 @@ def setup_model_for_validation(model, cfg: DictConfig) -> None:
     Set up the model for evaluation (validation), without touching training data.
     """
     model_cfg = model.cfg
-    decoding_config = model_cfg.decoding
-    decoding_config.strategy = "beam"
-    decoding_config.beam.beam_size = 8
-    model.change_decoding_strategy(decoding_cfg=decoding_config)
+    if isinstance(model, EncDecRNNTModel):
+        decoding_config = model_cfg.decoding
+        decoding_config.strategy = "beam"
+        decoding_config.beam.beam_size = 8
+        model.change_decoding_strategy(decoding_cfg=decoding_config)
     model_cfg.validation_ds.batch_size = cfg["model"]["validation_ds"].get("batch_size", 16)
 
 def get_hypotheses(model, log_probs_or_encoded, encoded_len):
