@@ -121,6 +121,7 @@ def setup_model_for_validation(model, cfg: DictConfig) -> None:
     """
     model_cfg = model.cfg
     if isinstance(model, EncDecRNNTModel):
+        print(model.cfg.decoding.greedy.get("max_symbols_per_step", "NOT SET"))
         decoding_config = model_cfg.decoding
         decoding_config.strategy = "beam"
         decoding_config.beam.beam_size = 2
