@@ -121,13 +121,12 @@ def setup_model_for_validation(model, cfg: DictConfig) -> None:
     """
     model_cfg = model.cfg
     if isinstance(model, EncDecRNNTModel):
-        print(model.cfg.decoding.greedy.get("max_symbols_per_step", "NOT SET"))
         decoding_config = model_cfg.decoding
         decoding_config.strategy = "beam"
-        decoding_config.beam.beam_size = 2
+        decoding_config.beam.beam_size = 1
         decoding_config.beam.return_best_hypothesis = True
         model.change_decoding_strategy(decoding_cfg=decoding_config)
-    model_cfg.validation_ds.batch_size = cfg["model"]["validation_ds"].get("batch_size", 16)
+    model_cfg.validation_ds.batch_size = cfg["model"]["validation_ds"].get("batch_size", 32)
 
 def get_hypotheses(model, log_probs_or_encoded, encoded_len):
     """
