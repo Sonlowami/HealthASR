@@ -250,13 +250,14 @@ def evaluate_model(
 
             references, hypotheses = run_model_inference(model, model._validation_dl, device)
             references, hypotheses = clean_references_hypotheses(references, hypotheses)
-            
-            from nemo.collections.asr.models import EncDecRNNTModel
 
+            from nemo.collections.asr.models import EncDecRNNTModel
+            print("Language", lang_code)
+            print(isinstance(model, EncDecRNNTModel))
             if lang_code == "dav" and isinstance(model, EncDecRNNTModel):
                 sample_references = references[:5]
                 sample_hypotheses = hypotheses[:5]
-                print(f"    Sample rieferences: {sample_references}")
+                print(f"    Sample references: {sample_references}")
                 print(f"    Sample hypotheses: {sample_hypotheses}")
 
             evaluator = ASREvaluator()
