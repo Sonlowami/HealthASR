@@ -7,8 +7,8 @@ from pathlib import Path
 
 import torch
 from omegaconf import OmegaConf, open_dict
-from torchao.quantization import Float8WeightOnlyConfig, Int8WeightOnlyConfig
-from torchao.quantization.qat import Float8FakeQuantizeConfig, IntxFakeQuantizeConfig, QATConfig
+from torchao.quantization import Int8WeightOnlyConfig
+from torchao.quantization.qat import IntxFakeQuantizeConfig, QATConfig, IntxWeightOnlyConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -251,15 +251,6 @@ def evaluate_model(
             references, hypotheses = run_model_inference(model, model._validation_dl, device)
             references, hypotheses = clean_references_hypotheses(references, hypotheses)
 
-            from nemo.collections.asr.models import EncDecRNNTModel
-            print("Language", lang_code)
-            print(isinstance(model, EncDecRNNTModel))
-            if lang_code == "dav" and isinstance(model, EncDecRNNTModel):
-                sample_references = references[:5]
-                sample_hypotheses = hypotheses[:5]
-                print(f"    Sample references: {sample_references}")
-                print(f"    Sample hypotheses: {sample_hypotheses}")
-
             evaluator = ASREvaluator()
             evaluator.compute_wer(references, hypotheses)
             evaluator.compute_cer(references, hypotheses)
@@ -268,15 +259,26 @@ def evaluate_model(
         return per_language
 
     base_config = {
-        "float8_weight_qat": Float8WeightOnlyConfig(),
+        "int6_weight_qat": IntxWeightOnlyConfig(weight_dtype=torch.int6),
+        "int4_weight_qat": IntxWeightOnlyConfig(weight_dtype=torch.int4),
         "int8_weight_qat": Int8WeightOnlyConfig(),
     }
 
     quantization_configs = {
-        "float8_weight_qat": QATConfig(
-            weight_config=Float8FakeQuantizeConfig(),
+        "int6_weight_qat": QATConfig(
+            weight_config=IntxFakeQuantizeConfig(
+                torch.int6,
+                "per_channel",
+                is_symmetric=True),
             step="prepare",
         ),
+        "int4_weight_qat": QATConfig(
+                    weight_config=IntxFakeQuantizeConfig(
+                        torch.int4,
+                        "per_channel",
+                        is_symmetric=True),
+                    step="prepare",
+                ),
         "int8_weight_qat": QATConfig(
             weight_config=IntxFakeQuantizeConfig(
                 torch.int8,
