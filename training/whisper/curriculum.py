@@ -48,18 +48,16 @@ def easiest_fraction(scores: list[float], fraction: float) -> list[int]:
 
 
 @torch.no_grad()
-def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 32,
-              num_workers: int = 8, max_new_tokens: int = 128):
+def transcribe_dataset(model, processor, dataset, lang_token_id: int, batch_size: int = 32,
+                       num_workers: int = 8, max_new_tokens: int = 128):
     """
-    Rank clips by Sunbird WER (decode vs reference). Lower WER = easier.
-    Uses generate() — slower than NeMo CTC scoring; parallel WAV load + batch help.
+    Decode a dataset; return (references, hypotheses) as cleaned lowercase strings
+    (punctuation stripped — same norm as training WER ranking).
     """
     device = next(model.parameters()).device
     language = processor.tokenizer.decode([lang_token_id])
     was_training = model.training
     model.eval()
-    # Whisper generation_config always has max_length; we pass max_new_tokens.
-    # HF logs a harmless conflict every batch — silence just that logger.
     gen_logger = logging.getLogger("transformers.generation.utils")
     prev_gen_level = gen_logger.level
     gen_logger.setLevel(logging.ERROR)
@@ -90,7 +88,7 @@ def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 3
         persistent_workers=(num_workers > 0),
     )
 
-    wers, total_edits, total_words = [], 0, 0
+    references, hypotheses = [], []
     try:
         for wavs, texts in tqdm(loader, desc=f"Sunbird WER ({language})"):
             feats = processor.feature_extractor(
@@ -102,15 +100,33 @@ def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 3
                     max_new_tokens=max_new_tokens, num_beams=1,
                 )
             hyps = processor.batch_decode(ids, skip_special_tokens=True)
-
             for ref_text, hyp_text in zip(texts, hyps):
-                ref, hyp = _norm(ref_text), _norm(hyp_text)
-                edits = _edits(ref, hyp)
-                wers.append(edits / len(ref) if ref else 0.0)
-                total_edits += edits
-                total_words += len(ref)
+                # Join normalized tokens so WER/CER share the same cleaned text
+                references.append(" ".join(_norm(ref_text)))
+                hypotheses.append(" ".join(_norm(hyp_text)))
     finally:
         gen_logger.setLevel(prev_gen_level)
         if was_training:
             model.train()
+    return references, hypotheses
+
+
+@torch.no_grad()
+def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 32,
+              num_workers: int = 8, max_new_tokens: int = 128):
+    """
+    Rank clips by Sunbird WER (decode vs reference). Lower WER = easiest.
+    Uses generate() — slower than NeMo CTC scoring; parallel WAV load + batch help.
+    """
+    references, hypotheses = transcribe_dataset(
+        model, processor, dataset, lang_token_id,
+        batch_size=batch_size, num_workers=num_workers, max_new_tokens=max_new_tokens,
+    )
+    wers, total_edits, total_words = [], 0, 0
+    for ref_text, hyp_text in zip(references, hypotheses):
+        ref, hyp = ref_text.split(), hyp_text.split()
+        edits = _edits(ref, hyp)
+        wers.append(edits / len(ref) if ref else 0.0)
+        total_edits += edits
+        total_words += len(ref)
     return wers, (total_edits / total_words if total_words else 0.0)

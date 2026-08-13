@@ -5,18 +5,13 @@ Model-agnostic: pass --model_path (any final/checkpoint dir). Data/languages
 come from a whisper YAML (same shape as training configs).
 
 Flow (matches teammate NeMo compression script):
-  1) baseline WER + size
-  2) QAT prepare (fake quant on Linear)
+  1) baseline WER/CER/size/params/MACs
+  2) QAT prepare (fake quant on Linear) → eval
   3) short Seq2SeqTrainer finetune
-  4) persist → fresh model + real Int8/Float8 weight-only PTQ
-  5) re-eval WER + size → results.json
+  4) persist → fresh model + real Int8/Int4/Int6/Float8 weight-only PTQ
+  5) re-eval + CES → results.json
 
-Example:
-  python training/whisper/qat_finetune.py \\
-    --config config/whisper_qat.yaml \\
-    --model_path /path/to/any/whisper/final \\
-    --quant int8_weight_qat \\
-    --output_dir /project/.../compression/run1
+Schemes: --quant int8_weight_qat | int4_weight_qat | int6_weight_qat | float8_weight_qat
 """
 from __future__ import annotations
 
@@ -34,8 +29,14 @@ from transformers import GenerationConfig, WhisperForConditionalGeneration, Whis
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import curriculum  # noqa: E402
 import train as whisper_train  # noqa: E402
-from compression.eval_metrics import count_parameters, measure_model_size_bytes  # noqa: E402
-from compression.quantize import persist_after_finetune, prepare_qat  # noqa: E402
+from compression.eval_metrics import (  # noqa: E402
+    ASREvaluator,
+    attach_ces_from_size,
+    count_parameters,
+    estimate_macs_whisper,
+    measure_model_size_bytes,
+)
+from compression.quantize import list_schemes, persist_after_finetune, prepare_qat  # noqa: E402
 
 
 def load_json(path: Path) -> dict:
@@ -60,7 +61,7 @@ def load_whisper(model_path: str, device: torch.device):
 
 
 def evaluate_languages(model, processor, langs: dict, cfg: dict) -> dict:
-    """Per-language corpus WER on each language's eval set."""
+    """Per-language WER/CER/combined_error (ces filled later via attach_ces_from_size)."""
     qat_cfg = cfg.get("qat") or {}
     score_bs = int(qat_cfg.get("score_batch_size", (cfg.get("curriculum") or {}).get("score_batch_size", 32)))
     num_workers = int(qat_cfg.get("score_num_workers", (cfg.get("curriculum") or {}).get("score_num_workers", 16)))
@@ -70,17 +71,25 @@ def evaluate_languages(model, processor, langs: dict, cfg: dict) -> dict:
     model.eval()
     for name, lang in langs.items():
         print(f"  Evaluating {name} ({len(lang['eval'])} clips)...", flush=True)
-        _, wer = curriculum.score_wer(
+        refs, hyps = curriculum.transcribe_dataset(
             model, processor, lang["eval"], lang["token_id"],
             batch_size=score_bs, num_workers=num_workers, max_new_tokens=max_new,
         )
-        out[name] = {"wer": float(wer), "n": int(len(lang["eval"]))}
-        print(f"  {name}: WER {wer:.4f}", flush=True)
+        ev = ASREvaluator()
+        ev.compute_wer(refs, hyps)
+        ev.compute_cer(refs, hyps)
+        row = ev.to_dict()
+        row["n"] = int(len(lang["eval"]))
+        out[name] = row
+        print(
+            f"  {name}: WER {ev.wer:.4f}  CER {ev.cer:.4f}  "
+            f"combined_error {row['combined_error']:.4f}",
+            flush=True,
+        )
     return out
 
 
 def short_finetune(model, processor, langs: dict, cfg: dict, output_dir: str) -> None:
-    """One (or few) epoch(s) of bilingual/monolingual FT with current model (QAT-prepared)."""
     train_ds = whisper_train.combine(
         [l["train"] for l in langs.values()],
         [l["oversample"] for l in langs.values()],
@@ -88,11 +97,9 @@ def short_finetune(model, processor, langs: dict, cfg: dict, output_dir: str) ->
     eval_ds = concatenate_datasets([l["eval"] for l in langs.values()])
     wer_samples = whisper_train.pick_wer_samples(langs, n_per_lang=1)
 
-    # Merge training knobs: base training: then qat.finetune: overrides (short run)
     ft_cfg = dict(cfg)
     training = dict(cfg.get("training") or {})
     training.update(cfg.get("qat", {}).get("finetune") or {})
-    # Sensible short-FT defaults if not specified
     training.setdefault("num_train_epochs", 1)
     training.setdefault("eval_steps", 500)
     training.setdefault("save_steps", 500)
@@ -115,6 +122,7 @@ def run_one_model(
     schemes: list[str],
     output_dir: Path,
     skip_baseline: bool,
+    skip_finetune: bool,
     existing: dict,
 ) -> dict:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -135,9 +143,12 @@ def run_one_model(
         print("\n-- baseline --", flush=True)
         model, processor = load_whisper(model_path, device)
         lang_results = evaluate_languages(model, processor, langs, cfg)
+        for v in lang_results.values():
+            v["ces"] = None  # baseline CES is null (mate schema)
         entry["baseline"] = {
             "model_path": model_path,
             "params": count_parameters(model),
+            "macs": estimate_macs_whisper(model),
             "size": measure_model_size_bytes(model),
             "languages": lang_results,
         }
@@ -147,21 +158,39 @@ def run_one_model(
     elif "baseline" in entry:
         print("Skipping baseline (already in results.json)", flush=True)
 
-    baseline_size = entry.get("baseline", {}).get("size")
+    baseline = entry.get("baseline") or {}
+    baseline_size = baseline.get("size")
+    baseline_langs = baseline.get("languages") or {}
 
     # --- QAT schemes ---
     quant_results = entry.setdefault("quantization", {})
     for scheme in schemes:
         print(f"\n-- QAT scheme: {scheme} --", flush=True)
         q_entry = quant_results.setdefault(scheme, {})
-        if "finetuned" in q_entry:
+        if "finetuned" in q_entry and not skip_finetune:
             print(f"  {scheme}: finetuned already in results — skip", flush=True)
             continue
 
         model, processor = load_whisper(model_path, device)
         prepare_qat(model, scheme)
-        print("  QAT prepare done; starting short finetune...", flush=True)
+        print("  QAT prepare done.", flush=True)
 
+        # Mate step: measure under fake-quant before finetune
+        if "languages" not in q_entry:
+            print("  Evaluating QAT-prepared (fake quant) model...", flush=True)
+            prep_langs = evaluate_languages(model, processor, langs, cfg)
+            prep_size = measure_model_size_bytes(model)
+            attach_ces_from_size(prep_langs, baseline_langs, baseline_size, prep_size)
+            q_entry["languages"] = prep_langs
+            q_entry["size"] = prep_size  # often ≈ baseline under fake quant
+            save_json(existing, output_dir / "results.json")
+
+        if skip_finetune:
+            del model
+            torch.cuda.empty_cache()
+            continue
+
+        print("  Starting short finetune...", flush=True)
         ft_dir = str(output_dir / model_id / scheme / "finetune")
         short_finetune(model, processor, langs, cfg, ft_dir)
 
@@ -171,22 +200,26 @@ def run_one_model(
         del model
         torch.cuda.empty_cache()
 
-        print("  Evaluating quantized model...", flush=True)
+        print("  Evaluating persisted quantized model...", flush=True)
         lang_results = evaluate_languages(q_model, processor, langs, cfg)
         q_size = measure_model_size_bytes(q_model)
+        q_params = count_parameters(q_model)
+        q_macs = estimate_macs_whisper(q_model)
+        attach_ces_from_size(lang_results, baseline_langs, baseline_size, q_size)
+
+        q_entry["size"] = q_size
         q_entry["finetuned"] = {
-            "params": count_parameters(q_model),
+            "params": q_params,
+            "macs": q_macs,
             "size": q_size,
             "size_ratio_vs_baseline": (q_size / baseline_size) if baseline_size else None,
             "languages": lang_results,
         }
 
-        # Save quantized weights for later use
         save_dir = output_dir / model_id / scheme / "quantized"
         save_dir.mkdir(parents=True, exist_ok=True)
         torch.save(q_model.state_dict(), save_dir / "quantized_state_dict.pt")
         processor.save_pretrained(save_dir)
-        # Keep a pointer to the original HF config/tokenizer for reload experiments
         (save_dir / "SOURCE_MODEL.txt").write_text(model_path + "\n")
         print(f"  Saved quantized state_dict → {save_dir}", flush=True)
 
@@ -202,14 +235,18 @@ def main():
     parser.add_argument("--config", required=True, help="Whisper YAML (languages + training/qat knobs)")
     parser.add_argument(
         "--model_path", action="append", dest="model_paths", default=None,
-        help="HF Whisper dir (final/checkpoint). Repeatable. Overrides config checkpoint if set.",
+        help="HF Whisper dir (final/checkpoint). Repeatable.",
     )
     parser.add_argument(
         "--quant", action="append", dest="schemes", default=None,
-        help="QAT scheme: int8_weight_qat and/or float8_weight_qat (repeatable)",
+        help="QAT scheme (repeatable): " + " | ".join(list_schemes()),
     )
     parser.add_argument("--output_dir", required=True, help="Where to write results.json + artifacts")
-    parser.add_argument("--skip_baseline", action="store_true", help="Skip baseline if already computed")
+    parser.add_argument("--skip_baseline", action="store_true")
+    parser.add_argument(
+        "--skip_finetune", action="store_true",
+        help="Only QAT-prepare + eval (no short FT / persist)",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -235,6 +272,7 @@ def main():
         results = run_one_model(
             mp, cfg, schemes, output_dir,
             skip_baseline=args.skip_baseline,
+            skip_finetune=args.skip_finetune,
             existing=results,
         )
         save_json(results, results_path)

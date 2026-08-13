@@ -29,7 +29,9 @@ training:
   report_to: none
 
 qat:
-  schemes: [int8_weight_qat]   # add float8_weight_qat for a second pass
+  # Override on CLI with --quant int4_weight_qat (repeatable).
+  # Available: int8_weight_qat | int4_weight_qat | int6_weight_qat | float8_weight_qat
+  schemes: [int8_weight_qat]
   score_batch_size: 32
   score_num_workers: 16
   score_max_new_tokens: 128

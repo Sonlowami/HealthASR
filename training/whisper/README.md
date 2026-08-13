@@ -35,10 +35,13 @@ python training/whisper/train.py --config config/whisper_config.yaml --curriculu
 #    in the config, then run --eval_only again
 
 # 5. QAT + short finetune (any --model_path; data from config/whisper_qat.yaml)
+#    schemes: int8_weight_qat | int4_weight_qat | int6_weight_qat | float8_weight_qat
+#    results.json includes WER/CER/CES/combined_error/params/macs/size (mate schema)
 python training/whisper/qat_finetune.py \
   --config config/whisper_qat.yaml \
   --model_path /path/to/any/whisper/final \
   --quant int8_weight_qat \
+  --quant int4_weight_qat \
   --output_dir ./whisper_qat_out
 ```
 

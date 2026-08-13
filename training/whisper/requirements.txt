@@ -11,3 +11,4 @@ editdistance
 tqdm
 wandb
 torchao
+thop
