@@ -7,8 +7,8 @@ from pathlib import Path
 
 import torch
 from omegaconf import OmegaConf, open_dict
-from torchao.quantization import Int8WeightOnlyConfig
-from torchao.quantization.qat import IntxFakeQuantizeConfig, QATConfig, IntxWeightOnlyConfig
+from torchao.quantization import Int8WeightOnlyConfig, IntxWeightOnlyConfig
+from torchao.quantization.qat import IntxFakeQuantizeConfig, QATConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
