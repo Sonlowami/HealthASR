@@ -33,6 +33,13 @@ python training/whisper/train.py --config config/whisper_config.yaml --curriculu
 
 # 4. evaluate the fine-tuned model: set checkpoint: ./whisper_experiments/kin-dav/final
 #    in the config, then run --eval_only again
+
+# 5. QAT + short finetune (any --model_path; data from config/whisper_qat.yaml)
+python training/whisper/qat_finetune.py \
+  --config config/whisper_qat.yaml \
+  --model_path /path/to/any/whisper/final \
+  --quant int8_weight_qat \
+  --output_dir ./whisper_qat_out
 ```
 
 ## Notes
