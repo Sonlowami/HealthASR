@@ -124,6 +124,7 @@ def setup_model_for_validation(model, cfg: DictConfig) -> None:
         decoding_config = model_cfg.decoding
         decoding_config.strategy = "beam"
         decoding_config.beam.beam_size = 8
+        decoding_config.beam.return_best_hypothesis = True
         model.change_decoding_strategy(decoding_cfg=decoding_config)
     model_cfg.validation_ds.batch_size = cfg["model"]["validation_ds"].get("batch_size", 16)
 
