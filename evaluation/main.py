@@ -160,7 +160,12 @@ def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str]
             tokens_np, token_len_np = tokens.cpu().numpy(), token_len.cpu().numpy()
             for t, t_len, hyp in zip(tokens_np, token_len_np, hyps):
                 references.append(model.tokenizer.ids_to_text(t[:t_len].tolist()))
-                hypotheses.append(" ".join(hyp.words) if hasattr(hyp, "words") else str(hyp))
+                if hasattr(hyp, "words"):
+                    hypotheses.append(" ".join(hyp.words))
+                elif hasattr(hyp, "text"):
+                    hypotheses.append(hyp.text)
+                elif isinstance(hyp, str):
+                    hypotheses.append(str(hyp))
     model.train()
     return references, hypotheses
 
