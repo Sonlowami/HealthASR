@@ -10,6 +10,9 @@
 #
 # Backfill MACs only (after pip install thop):
 #   SLURM_TIME=0:30:00 ./scripts/submit_qat_whisper.sh --fill_macs
+#
+# Refill CER/CES/combined_error (re-decode baseline+schemes missing CER):
+#   SLURM_TIME=3:00:00 ./scripts/submit_qat_whisper.sh --refill_metrics
 
 set -euo pipefail
 

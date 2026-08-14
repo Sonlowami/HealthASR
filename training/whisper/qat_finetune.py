@@ -279,6 +279,144 @@ def run_one_model(
     return existing
 
 
+def _lang_missing_cer(languages: dict | None) -> bool:
+    if not languages:
+        return True
+    return any(v.get("cer") is None for v in languages.values())
+
+
+def _load_quantized_for_scheme(
+    model_path: str,
+    output_dir: Path,
+    model_id: str,
+    scheme: str,
+    device: torch.device,
+):
+    """Rebuild quantized model from saved state_dict (or finetune/final + persist)."""
+    def fresh_loader():
+        m, _ = load_whisper(model_path, device)
+        return m
+
+    sd_path = output_dir / model_id / scheme / "quantized" / "quantized_state_dict.pt"
+    processor = WhisperProcessor.from_pretrained(model_path)
+
+    if sd_path.is_file():
+        fresh = fresh_loader()
+        quantize_model(fresh, config=get_qat_scheme(scheme)["base"])
+        try:
+            state = torch.load(sd_path, map_location=device, weights_only=True)
+        except TypeError:
+            state = torch.load(sd_path, map_location=device)
+        fresh.load_state_dict(state, strict=False)
+        fresh.to(device)
+        return fresh, processor
+
+    ft_final = output_dir / model_id / scheme / "finetune" / "final"
+    if (ft_final / "config.json").is_file():
+        model, processor = load_whisper(str(ft_final), device)
+        q_model = persist_after_finetune(model, fresh_loader, scheme)
+        q_model.to(device)
+        del model
+        return q_model, processor
+
+    raise FileNotFoundError(
+        f"No quantized weights for {scheme} under {output_dir / model_id / scheme}"
+    )
+
+
+def refill_metrics(
+    model_path: str,
+    cfg: dict,
+    output_dir: Path,
+    existing: dict,
+    force: bool = False,
+) -> dict:
+    """
+    Re-score WER/CER/combined_error and attach CES for baseline + finished schemes.
+    Skips decode when CER already present (unless force); still fills CES once baseline CER exists.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_id = Path(model_path).name
+    if model_id in ("final", "checkpoint"):
+        model_id = Path(model_path).parent.name
+    entry = existing.setdefault(model_id, {})
+    langs = whisper_train.build_language_datasets(cfg)
+
+    # --- baseline ---
+    baseline = entry.setdefault("baseline", {"model_path": model_path})
+    need_base_eval = force or _lang_missing_cer(baseline.get("languages"))
+    if need_base_eval:
+        print("\n-- refill baseline eval --", flush=True)
+        model, processor = load_whisper(model_path, device)
+        lang_results = evaluate_languages(model, processor, langs, cfg)
+        for v in lang_results.values():
+            v["ces"] = None
+        baseline["languages"] = lang_results
+        baseline["model_path"] = model_path
+        baseline["params"] = count_parameters(model)
+        baseline["size"] = measure_model_size_bytes(model)
+        if baseline.get("macs") in (None, 0):
+            baseline["macs"] = estimate_macs_whisper(model)
+        del model
+        torch.cuda.empty_cache()
+        save_json(existing, output_dir / "results.json")
+    else:
+        print("Skipping baseline decode (CER present)", flush=True)
+
+    baseline_size = baseline.get("size")
+    baseline_langs = baseline.get("languages") or {}
+
+    # --- schemes ---
+    quant = entry.setdefault("quantization", {})
+    for scheme, q_entry in list(quant.items()):
+        ft = q_entry.get("finetuned")
+        if not ft:
+            print(f"  {scheme}: no finetuned — skip", flush=True)
+            continue
+
+        need_eval = force or _lang_missing_cer(ft.get("languages"))
+        if need_eval:
+            print(f"\n-- refill {scheme} eval --", flush=True)
+            try:
+                q_model, processor = _load_quantized_for_scheme(
+                    model_path, output_dir, model_id, scheme, device,
+                )
+            except Exception as exc:
+                print(f"  {scheme}: could not load quantized model ({exc}) — skip", flush=True)
+                continue
+            lang_results = evaluate_languages(q_model, processor, langs, cfg)
+            ft["languages"] = lang_results
+            ft["params"] = count_parameters(q_model)
+            ft["size"] = measure_model_size_bytes(q_model)
+            q_entry["size"] = ft["size"]
+            if baseline_size:
+                ft["size_ratio_vs_baseline"] = ft["size"] / baseline_size
+            if ft.get("macs") in (None, 0):
+                ft["macs"] = estimate_macs_whisper(q_model)
+            del q_model
+            torch.cuda.empty_cache()
+        else:
+            print(f"  {scheme}: CER present — only refreshing CES", flush=True)
+
+        attach_ces_from_size(
+            ft.get("languages") or {},
+            baseline_langs,
+            baseline_size,
+            ft.get("size") or q_entry.get("size"),
+        )
+        # Also refresh CES on prepare-eval block if present
+        if "languages" in q_entry and q_entry["languages"] is not ft.get("languages"):
+            attach_ces_from_size(
+                q_entry["languages"],
+                baseline_langs,
+                baseline_size,
+                q_entry.get("size") or ft.get("size"),
+            )
+        save_json(existing, output_dir / "results.json")
+
+    return existing
+
+
 def fill_missing_macs(
     model_path: str,
     output_dir: Path,
@@ -389,6 +527,15 @@ def main():
         "--fill_macs", action="store_true",
         help="Only backfill missing macs in results.json (needs thop). No QAT training.",
     )
+    parser.add_argument(
+        "--refill_metrics", action="store_true",
+        help="Re-score missing CER/combined_error and attach CES (no QAT training). "
+             "Use --force_refill to re-decode even when CER exists.",
+    )
+    parser.add_argument(
+        "--force_refill", action="store_true",
+        help="With --refill_metrics: re-decode all languages even if CER is present.",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -408,6 +555,9 @@ def main():
     results_path = output_dir / "results.json"
     results = load_json(results_path)
 
+    if args.fill_macs and args.refill_metrics:
+        raise SystemExit("Use either --fill_macs or --refill_metrics, not both")
+
     if args.fill_macs:
         for mp in model_paths:
             if not Path(mp).exists():
@@ -416,6 +566,18 @@ def main():
             results = fill_missing_macs(mp, output_dir, results, schemes=None)
             save_json(results, results_path)
         print(f"\nDone (fill_macs). Results → {results_path}", flush=True)
+        return
+
+    if args.refill_metrics:
+        for mp in model_paths:
+            if not Path(mp).exists():
+                raise FileNotFoundError(f"model_path not found: {mp}")
+            print(f"\n=== refill_metrics: {mp} ===", flush=True)
+            results = refill_metrics(
+                mp, cfg, output_dir, results, force=args.force_refill,
+            )
+            save_json(results, results_path)
+        print(f"\nDone (refill_metrics). Results → {results_path}", flush=True)
         return
 
     for mp in model_paths:
