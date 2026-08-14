@@ -142,20 +142,42 @@ def measure_model_size_bytes(model: torch.nn.Module) -> int:
             Path(tmp_path).unlink(missing_ok=True)
 
 
-def estimate_macs_whisper(model: torch.nn.Module, n_mels: int = 80, n_frames: int = 3000) -> float | None:
-    """MACs for one forward with a 30s-ish mel spectrogram. None if thop unavailable."""
+def estimate_macs_whisper(model: torch.nn.Module, n_mels: int | None = None, n_frames: int = 3000) -> float | None:
+    """MACs for one encoder forward with a 30s-ish mel spectrogram. None if thop unavailable."""
     if thop_profile is None:
         print("thop not installed — skipping MACs (pip install thop)", flush=True)
         return None
+
+    # Whisper-large-v3 uses 128 mels; older models use 80. Prefer config / conv1.
+    if n_mels is None:
+        n_mels = 80
+        cfg = getattr(model, "config", None)
+        if cfg is not None and getattr(cfg, "num_mel_bins", None):
+            n_mels = int(cfg.num_mel_bins)
+        else:
+            try:
+                conv1 = model.model.encoder.conv1
+                n_mels = int(conv1.weight.shape[1])
+            except Exception:
+                pass
+
     device = next(model.parameters()).device
-    dtype = next(model.parameters()).dtype
+    # thop often prefers float32; quantized wrappers may still accept it
+    dtype = torch.float32
     was_training = model.training
     model.eval()
     dummy = torch.zeros(1, n_mels, n_frames, device=device, dtype=dtype)
     try:
         # Prefer encoder-only if present (cheaper / more stable under quant wrappers)
         if hasattr(model, "model") and hasattr(model.model, "encoder"):
-            macs, _ = thop_profile(model.model.encoder, inputs=(dummy,), verbose=False)
+            enc = model.model.encoder
+            # Match encoder weight dtype when possible
+            try:
+                w = enc.conv1.weight
+                dummy = dummy.to(dtype=w.dtype)
+            except Exception:
+                pass
+            macs, _ = thop_profile(enc, inputs=(dummy,), verbose=False)
         else:
             macs, _ = thop_profile(model, inputs=(dummy,), verbose=False)
         return float(macs)
