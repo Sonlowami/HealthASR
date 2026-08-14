@@ -129,8 +129,10 @@ class _WhisperPruneForward(nn.Module):
 def _example_inputs(model: nn.Module, scope: Scope, device: torch.device):
     cfg = getattr(model, "config", None)
     n_mels = int(getattr(cfg, "num_mel_bins", 80) or 80)
-    # short mel to keep DG build memory down
-    n_frames = 300
+    # Whisper encoder hard-requires 3000 mel frames
+    n_frames = int(getattr(cfg, "max_source_positions", 1500) or 1500) * 2  # 1500*2=3000
+    if n_frames != 3000:
+        n_frames = 3000
     feats = torch.zeros(1, n_mels, n_frames, device=device)
     if scope == "encoder":
         return feats
