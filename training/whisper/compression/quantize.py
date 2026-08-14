@@ -146,29 +146,49 @@ def get_qat_scheme(name: str) -> dict:
         if base is None:
             raise ImportError(
                 "int6_weight_qat requires torchao IntxWeightOnlyConfig with "
-                "bit_width=6. pip install -U torchao, or use int4/int8."
+                "bit_width=6 / weight_dtype=torch.int6. "
+                "pip install -U torchao, or use int4/int8."
             )
-        # Intx fake quant with 6-bit — try bit_width kw if dtype int6 missing
+        # Prefer torch.int6 / TorchAODType.INT6 (plain int 6 is rejected as dtype)
+        int6_dtype = getattr(torch, "int6", None)
+        if int6_dtype is None:
+            try:
+                from torchao.quantization.qat.fake_quantize_config import TorchAODType
+                int6_dtype = TorchAODType.INT6
+            except Exception as e:
+                raise ImportError(
+                    "torch.int6 / TorchAODType.INT6 not available for int6 QAT. "
+                    f"Upgrade torchao. ({e})"
+                ) from e
         weight_fq = None
-        for args, kwargs in (
-            ((torch.int8,), {"bit_width": 6, "granularity": "per_channel", "is_symmetric": True}),
-            ((6,), {"granularity": "per_channel", "is_symmetric": True}),
-            ((torch.int8,), {"is_symmetric": True}),  # last resort: document as approx
+        for kwargs in (
+            {"granularity": "per_channel", "is_symmetric": True},
+            {"group_size": 32, "is_symmetric": True},
+            {"is_symmetric": True},
         ):
             try:
-                weight_fq = IntxFakeQuantizeConfig(*args, **kwargs)
+                weight_fq = IntxFakeQuantizeConfig(int6_dtype, **kwargs)
                 break
             except TypeError:
                 continue
+            except ValueError:
+                continue
         if weight_fq is None:
-            raise ImportError(
-                "Could not construct IntxFakeQuantizeConfig for int6. "
-                "Upgrade torchao or use --quant int4_weight_qat."
-            )
+            # positional granularity string (older API)
+            try:
+                weight_fq = IntxFakeQuantizeConfig(
+                    int6_dtype, "per_channel", is_symmetric=True,
+                )
+            except Exception as e:
+                raise ImportError(
+                    "Could not construct IntxFakeQuantizeConfig for int6. "
+                    f"Upgrade torchao or use --quant int4_weight_qat. ({e})"
+                ) from e
         return {
             "name": "int6_weight_qat",
             "prepare": QATConfig(weight_config=weight_fq, step="prepare"),
             "base": base,
+            "base_desc": "IntxWeightOnlyConfig(int6)",
         }
 
     if name in ("float8_weight_qat", "float8", "float8_qat"):
