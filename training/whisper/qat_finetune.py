@@ -41,6 +41,7 @@ from compression.quantize import (  # noqa: E402
     list_schemes,
     persist_after_finetune,
     prepare_qat,
+    quantize_model,
 )
 
 
@@ -278,6 +279,95 @@ def run_one_model(
     return existing
 
 
+def fill_missing_macs(
+    model_path: str,
+    output_dir: Path,
+    existing: dict,
+    schemes: list[str] | None = None,
+) -> dict:
+    """Backfill macs in results.json for baseline + finished schemes (needs thop)."""
+    try:
+        import thop  # noqa: F401
+    except ImportError as e:
+        raise SystemExit("thop is required for --fill_macs: pip install thop") from e
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_id = Path(model_path).name
+    if model_id in ("final", "checkpoint"):
+        model_id = Path(model_path).parent.name
+    entry = existing.setdefault(model_id, {})
+
+    def fresh_loader():
+        m, _ = load_whisper(model_path, device)
+        return m
+
+    # baseline
+    baseline = entry.get("baseline")
+    if baseline is not None and baseline.get("macs") in (None, 0):
+        print(f"  Filling baseline MACs from {model_path}...", flush=True)
+        model, _ = load_whisper(model_path, device)
+        baseline["macs"] = estimate_macs_whisper(model)
+        baseline.setdefault("params", count_parameters(model))
+        print(f"  baseline macs={baseline['macs']}", flush=True)
+        del model
+        torch.cuda.empty_cache()
+        save_json(existing, output_dir / "results.json")
+
+    quant = entry.setdefault("quantization", {})
+    scheme_names = schemes or list(quant.keys())
+    for scheme in scheme_names:
+        q_entry = quant.get(scheme)
+        if not q_entry or "finetuned" not in q_entry:
+            print(f"  {scheme}: no finetuned block — skip", flush=True)
+            continue
+        ft = q_entry["finetuned"]
+        if ft.get("macs") not in (None, 0):
+            print(f"  {scheme}: macs already set ({ft['macs']}) — skip", flush=True)
+            continue
+
+        print(f"  Filling MACs for {scheme}...", flush=True)
+        macs = None
+        sd_path = output_dir / model_id / scheme / "quantized" / "quantized_state_dict.pt"
+        try:
+            if sd_path.is_file():
+                fresh = fresh_loader()
+                cfg = get_qat_scheme(scheme)
+                quantize_model(fresh, config=cfg["base"])
+                try:
+                    state = torch.load(sd_path, map_location=device, weights_only=True)
+                except TypeError:
+                    state = torch.load(sd_path, map_location=device)
+                fresh.load_state_dict(state, strict=False)
+                fresh.to(device)
+                macs = estimate_macs_whisper(fresh)
+                del fresh
+            else:
+                ft_final = output_dir / model_id / scheme / "finetune" / "final"
+                if (ft_final / "config.json").is_file():
+                    model, _ = load_whisper(str(ft_final), device)
+                    q_model = persist_after_finetune(model, fresh_loader, scheme)
+                    q_model.to(device)
+                    macs = estimate_macs_whisper(q_model)
+                    del model, q_model
+                else:
+                    print(f"  {scheme}: no quantized artifacts; using baseline model for MACs", flush=True)
+                    model, _ = load_whisper(model_path, device)
+                    macs = estimate_macs_whisper(model)
+                    del model
+        except Exception as exc:
+            print(f"  {scheme}: MACs failed ({exc}); falling back to baseline model", flush=True)
+            model, _ = load_whisper(model_path, device)
+            macs = estimate_macs_whisper(model)
+            del model
+
+        ft["macs"] = macs
+        print(f"  {scheme}: macs={macs}", flush=True)
+        torch.cuda.empty_cache()
+        save_json(existing, output_dir / "results.json")
+
+    return existing
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", required=True, help="Whisper YAML (languages + training/qat knobs)")
@@ -294,6 +384,10 @@ def main():
     parser.add_argument(
         "--skip_finetune", action="store_true",
         help="Only QAT-prepare + eval (no short FT / persist)",
+    )
+    parser.add_argument(
+        "--fill_macs", action="store_true",
+        help="Only backfill missing macs in results.json (needs thop). No QAT training.",
     )
     args = parser.parse_args()
 
@@ -313,6 +407,16 @@ def main():
 
     results_path = output_dir / "results.json"
     results = load_json(results_path)
+
+    if args.fill_macs:
+        for mp in model_paths:
+            if not Path(mp).exists():
+                raise FileNotFoundError(f"model_path not found: {mp}")
+            print(f"\n=== fill_macs: {mp} ===", flush=True)
+            results = fill_missing_macs(mp, output_dir, results, schemes=None)
+            save_json(results, results_path)
+        print(f"\nDone (fill_macs). Results → {results_path}", flush=True)
+        return
 
     for mp in model_paths:
         if not Path(mp).exists():

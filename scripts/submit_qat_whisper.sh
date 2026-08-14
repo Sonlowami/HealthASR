@@ -1,12 +1,15 @@
 #!/bin/bash
 # Submit Whisper QAT + short finetune (torchao). Model-agnostic via MODEL_PATH / --model_path.
 #
-# Example:
+# Example (QAT):
 #   CONFIG=config/whisper_qat.yaml \
 #   RUN_ROOT=/project/community/rmwisene/pipeline_outputs/compression/whisper_kin_dav_qat \
 #   MODEL_PATH=/project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-curriculum-e15/final \
 #   SLURM_TIME=2:00:00 \
 #   ./scripts/submit_qat_whisper.sh --quant int8_weight_qat
+#
+# Backfill MACs only (after pip install thop):
+#   SLURM_TIME=0:30:00 ./scripts/submit_qat_whisper.sh --fill_macs
 
 set -euo pipefail
 
