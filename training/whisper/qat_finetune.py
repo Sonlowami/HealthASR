@@ -36,7 +36,12 @@ from compression.eval_metrics import (  # noqa: E402
     estimate_macs_whisper,
     measure_model_size_bytes,
 )
-from compression.quantize import list_schemes, persist_after_finetune, prepare_qat  # noqa: E402
+from compression.quantize import (  # noqa: E402
+    get_qat_scheme,
+    list_schemes,
+    persist_after_finetune,
+    prepare_qat,
+)
 
 
 def load_json(path: Path) -> dict:
@@ -105,6 +110,8 @@ def short_finetune(model, processor, langs: dict, cfg: dict, output_dir: str) ->
     training.setdefault("save_steps", 500)
     training.setdefault("logging_steps", 50)
     training.setdefault("report_to", "none")
+    # Keep mid + end checkpoints so persist failures don't lose FT weights
+    training["save_total_limit"] = max(2, int(training.get("save_total_limit") or 2))
     training["early_stopping_patience"] = None
     ft_cfg["training"] = training
 
@@ -113,7 +120,38 @@ def short_finetune(model, processor, langs: dict, cfg: dict, output_dir: str) ->
         model, processor, train_ds, eval_ds, ft_cfg, output_dir,
         wer_samples=wer_samples,
     )
-    trainer.train()
+    ckpt = whisper_train.latest_valid_checkpoint(output_dir)
+    if ckpt:
+        print(f"  Resuming short finetune from {ckpt}", flush=True)
+        trainer.train(resume_from_checkpoint=ckpt)
+    else:
+        trainer.train()
+    # Persist a stable "final" so persist-only restarts don't depend on checkpoint-*
+    model.save_pretrained(f"{output_dir}/final")
+    processor.save_pretrained(f"{output_dir}/final")
+    print(f"  Saved QAT-finetuned weights → {output_dir}/final", flush=True)
+
+
+def finetune_weights_dir(ft_dir: Path) -> Path | None:
+    """Return path to completed finetune weights if present (skip re-training)."""
+    final = ft_dir / "final"
+    if (final / "config.json").is_file() and (
+        (final / "model.safetensors").is_file() or (final / "pytorch_model.bin").is_file()
+    ):
+        return final
+    ckpt = whisper_train.latest_valid_checkpoint(str(ft_dir))
+    if ckpt is None:
+        return None
+    # Prefer checkpoints that finished the planned epoch (trainer_state)
+    state_path = Path(ckpt) / "trainer_state.json"
+    try:
+        state = json.loads(state_path.read_text())
+        epoch = float(state.get("epoch") or 0)
+        if epoch >= 0.999:
+            return Path(ckpt)
+    except Exception:
+        pass
+    return None
 
 
 def run_one_model(
@@ -171,30 +209,40 @@ def run_one_model(
             print(f"  {scheme}: finetuned already in results — skip", flush=True)
             continue
 
-        model, processor = load_whisper(model_path, device)
-        prepare_qat(model, scheme)
-        print("  QAT prepare done.", flush=True)
+        ft_dir = output_dir / model_id / scheme / "finetune"
+        reused = finetune_weights_dir(ft_dir)
 
-        # Mate step: measure under fake-quant before finetune
-        if "languages" not in q_entry:
-            print("  Evaluating QAT-prepared (fake quant) model...", flush=True)
-            prep_langs = evaluate_languages(model, processor, langs, cfg)
-            prep_size = measure_model_size_bytes(model)
-            attach_ces_from_size(prep_langs, baseline_langs, baseline_size, prep_size)
-            q_entry["languages"] = prep_langs
-            q_entry["size"] = prep_size  # often ≈ baseline under fake quant
-            save_json(existing, output_dir / "results.json")
+        if reused is not None and not skip_finetune:
+            # Finetune finished earlier; only persist + eval (avoids redoing ~50min FT)
+            print(f"  Reusing completed finetune weights from {reused}", flush=True)
+            model, processor = load_whisper(str(reused), device)
+        else:
+            model, processor = load_whisper(model_path, device)
+            prepare_qat(model, scheme)
+            print("  QAT prepare done.", flush=True)
 
-        if skip_finetune:
-            del model
-            torch.cuda.empty_cache()
-            continue
+            # Mate step: measure under fake-quant before finetune
+            if "languages" not in q_entry:
+                print("  Evaluating QAT-prepared (fake quant) model...", flush=True)
+                prep_langs = evaluate_languages(model, processor, langs, cfg)
+                prep_size = measure_model_size_bytes(model)
+                attach_ces_from_size(prep_langs, baseline_langs, baseline_size, prep_size)
+                q_entry["languages"] = prep_langs
+                q_entry["size"] = prep_size  # often ≈ baseline under fake quant
+                save_json(existing, output_dir / "results.json")
 
-        print("  Starting short finetune...", flush=True)
-        ft_dir = str(output_dir / model_id / scheme / "finetune")
-        short_finetune(model, processor, langs, cfg, ft_dir)
+            if skip_finetune:
+                del model
+                torch.cuda.empty_cache()
+                continue
+
+            print("  Starting short finetune...", flush=True)
+            short_finetune(model, processor, langs, cfg, str(ft_dir))
 
         print("  Persisting real weight-only quantization...", flush=True)
+        scheme_meta = get_qat_scheme(scheme)
+        if scheme_meta.get("base_desc"):
+            print(f"  PTQ backend: {scheme_meta['base_desc']}", flush=True)
         q_model = persist_after_finetune(model, fresh_loader, scheme)
         q_model.to(device)
         del model

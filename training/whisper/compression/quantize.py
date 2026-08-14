@@ -47,23 +47,59 @@ def quantize_model(model: torch.nn.Module, config=None, filter_fn=None):
 
 
 def _make_intx_weight_only(bit_width: int):
-    """Build IntxWeightOnlyConfig across torchao versions."""
+    """Build IntxWeightOnlyConfig across torchao versions (no mslk needed)."""
     if IntxWeightOnlyConfig is None:
         return None
-    for kwargs in (
-        {"bit_width": bit_width, "version": 2},
-        {"bit_width": bit_width},
-        {"weight_dtype": getattr(torch, f"int{bit_width}", None)},
-    ):
+    dtype = getattr(torch, f"int{bit_width}", None)
+    candidates = []
+    if dtype is not None:
+        candidates.extend(
+            [
+                {"weight_dtype": dtype, "version": 2},
+                {"weight_dtype": dtype},
+            ]
+        )
+    candidates.extend(
+        [
+            {"bit_width": bit_width, "version": 2},
+            {"bit_width": bit_width},
+        ]
+    )
+    for kwargs in candidates:
         try:
-            # drop None values
-            kw = {k: v for k, v in kwargs.items() if v is not None}
-            return IntxWeightOnlyConfig(**kw)
+            return IntxWeightOnlyConfig(**kwargs)
         except TypeError:
             continue
         except Exception:
             continue
     return None
+
+
+def _mslk_available() -> bool:
+    try:
+        import mslk  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _int4_ptq_config():
+    """
+    Prefer IntxWeightOnlyConfig(torch.int4): works without mslk.
+    Int4WeightOnlyConfig on recent torchao calls Int4Tensor.from_hp → needs mslk>=1.
+    """
+    base = _make_intx_weight_only(4)
+    if base is not None:
+        return base, "IntxWeightOnlyConfig(int4)"
+    if Int4WeightOnlyConfig is not None and _mslk_available():
+        try:
+            return Int4WeightOnlyConfig(group_size=32), "Int4WeightOnlyConfig(group_size=32)"
+        except TypeError:
+            return Int4WeightOnlyConfig(), "Int4WeightOnlyConfig()"
+    raise ImportError(
+        "int4 PTQ needs torchao IntxWeightOnlyConfig(weight_dtype=torch.int4), "
+        "or Int4WeightOnlyConfig + `pip install mslk-cuda==1.0.0`."
+    )
 
 
 def get_qat_scheme(name: str) -> dict:
@@ -88,19 +124,7 @@ def get_qat_scheme(name: str) -> dict:
         }
 
     if name in ("int4_weight_qat", "int4", "int4_qat"):
-        if Int4WeightOnlyConfig is None:
-            # Fall back to IntxWeightOnlyConfig(bit_width=4)
-            base = _make_intx_weight_only(4)
-            if base is None:
-                raise ImportError(
-                    "int4_weight_qat requires torchao Int4WeightOnlyConfig or "
-                    "IntxWeightOnlyConfig. pip install -U torchao"
-                )
-        else:
-            try:
-                base = Int4WeightOnlyConfig(group_size=32)
-            except TypeError:
-                base = Int4WeightOnlyConfig()
+        base, base_desc = _int4_ptq_config()
         # Fake quant: int4 + group_size is the common torchao pattern
         try:
             weight_fq = IntxFakeQuantizeConfig(
@@ -114,6 +138,7 @@ def get_qat_scheme(name: str) -> dict:
             "name": "int4_weight_qat",
             "prepare": QATConfig(weight_config=weight_fq, step="prepare"),
             "base": base,
+            "base_desc": base_desc,
         }
 
     if name in ("int6_weight_qat", "int6", "int6_qat"):
