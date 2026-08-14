@@ -301,6 +301,7 @@ def evaluate_model(
     finetune_lr = finetune_cfg.get("lr")
 
     def finetune_model(model_to_finetune):
+        model_to_finetune = model_to_finetune.train()
         model_utils.setup_model(model_to_finetune, cfg, change_vocab=False)
         if finetune_lr is not None:
             optim_cfg = copy.deepcopy(model_to_finetune.cfg.optim)
