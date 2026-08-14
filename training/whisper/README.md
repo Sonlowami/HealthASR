@@ -43,6 +43,13 @@ python training/whisper/qat_finetune.py \
   --quant int8_weight_qat \
   --quant int4_weight_qat \
   --output_dir ./whisper_qat_out
+
+# 6. FFN structural pruning 10/20/50% + recovery FT (mate-style torch-pruning)
+python training/whisper/prune_finetune.py \
+  --config config/whisper_prune.yaml \
+  --model_path /path/to/any/whisper/final \
+  --ratio 0.1 --ratio 0.2 --ratio 0.5 \
+  --output_dir ./whisper_prune_out
 ```
 
 ## Notes

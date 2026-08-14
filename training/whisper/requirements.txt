@@ -12,3 +12,4 @@ tqdm
 wandb
 torchao
 thop
+torch-pruning
