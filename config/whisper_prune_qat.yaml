@@ -1,0 +1,42 @@
+# Prune × QAT grid (mate nested JSON): 10/20/50% × int4/int6/int8
+checkpoint: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-curriculum-e15/final
+
+languages:
+  kinyarwanda:
+    train_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/train_processed_balanced_27h.tsv
+    eval_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda
+    lang_token_id: 50350
+    oversample: 1
+  kidawida:
+    train_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/train_processed.tsv
+    eval_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/pipeline_outputs/processed/kidawida
+    lang_token_id: 50318
+    oversample: 1
+
+training:
+  learning_rate: 1.0e-5
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  warmup_steps: 100
+  dataloader_num_workers: 16
+  bf16: true
+  report_to: none
+
+prune_qat:
+  prune_root: /project/community/rmwisene/pipeline_outputs/compression/whisper_kin_dav_prune
+  seed_results: /project/community/rmwisene/pipeline_outputs/compression/whisper_kin_dav_prune/results.json
+  percents: [10, 20, 50]
+  schemes: [int4_weight_qat, int6_weight_qat, int8_weight_qat]
+  score_batch_size: 32
+  score_num_workers: 16
+  score_max_new_tokens: 128
+  finetune:
+    num_train_epochs: 1
+    eval_steps: 500
+    save_steps: 500
+    logging_steps: 50
+    save_total_limit: 2
+    report_to: none

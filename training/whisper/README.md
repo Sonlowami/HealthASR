@@ -50,6 +50,15 @@ python training/whisper/prune_finetune.py \
   --model_path /path/to/any/whisper/final \
   --ratio 0.1 --ratio 0.2 --ratio 0.5 \
   --output_dir ./whisper_prune_out
+
+# 7. Prune × QAT grid (mate nested JSON): 10/20/50% × int4/int6/int8
+#    Needs pruned+FT dirs under prune_root (.../ffn_10/final etc.)
+python training/whisper/prune_qat_finetune.py \
+  --config config/whisper_prune_qat.yaml \
+  --model_path /path/to/baseline/final \
+  --prune_root /path/to/whisper_kin_dav_prune \
+  --seed_results /path/to/whisper_kin_dav_prune/results.json \
+  --output_dir ./whisper_prune_qat_out
 ```
 
 ## Notes
