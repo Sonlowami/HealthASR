@@ -1,0 +1,30 @@
+# Mate-style baseline JSON for Whisper FT checkpoints (eval only, no training).
+# Writes one results.json with top-level keys per model.
+
+languages:
+  kinyarwanda:
+    train_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/train_processed_balanced_27h.tsv
+    eval_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda
+    lang_token_id: 50350
+    oversample: 1
+  kidawida:
+    train_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/train_processed.tsv
+    eval_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/dev_processed.tsv
+    audio_dir: /project/community/rmwisene/pipeline_outputs/processed/kidawida
+    lang_token_id: 50318
+    oversample: 1
+
+# First batch: 3 models on orchard (bilingual no-curr later from Drive)
+models:
+  - key: kin-only-sunbird-e10
+    path: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-only-sunbird-e10/final
+  - key: kin-only-curriculum-e10
+    path: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-only-curriculum-e10/final
+  - key: kin-dav-balanced-27h-curriculum-e15
+    path: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-curriculum-e15/final
+
+eval:
+  score_batch_size: 32
+  score_num_workers: 16
+  score_max_new_tokens: 128

@@ -59,6 +59,11 @@ python training/whisper/prune_qat_finetune.py \
   --prune_root /path/to/whisper_kin_dav_prune \
   --seed_results /path/to/whisper_kin_dav_prune/results.json \
   --output_dir ./whisper_prune_qat_out
+
+# 8. Mate-style baseline JSON for FT checkpoints (eval only)
+python training/whisper/eval_models_json.py \
+  --config config/whisper_eval_models.yaml \
+  --output_dir ./whisper_ft_baselines
 ```
 
 ## Notes
