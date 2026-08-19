@@ -15,7 +15,7 @@ languages:
     lang_token_id: 50318
     oversample: 1
 
-# First batch: 3 models on orchard (bilingual no-curr later from Drive)
+# Batch on orchard (3 already scored; 4th after Drive pull)
 models:
   - key: kin-only-sunbird-e10
     path: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-only-sunbird-e10/final
@@ -23,6 +23,9 @@ models:
     path: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-only-curriculum-e10/final
   - key: kin-dav-balanced-27h-curriculum-e15
     path: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-curriculum-e15/final
+  # Bilingual no-curriculum (from Drive tar whisper-salt-kin-dav-e15-nocurriculum.tar)
+  - key: kin-dav-balanced-27h-e15-nocurriculum
+    path: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-e15-nocurriculum/final
 
 eval:
   score_batch_size: 32
