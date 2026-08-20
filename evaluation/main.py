@@ -240,6 +240,7 @@ def evaluate_model(
     def evaluate_languages_for_model(model, device):
         language_items_local = list(language_codes.items())
         _, first_lang_code_local = language_items_local[0]
+        model_utils.setup_model_for_validation(model, cfg)
         setup_validation_for_language(model, cfg, first_lang_code_local)
 
         per_language = {}
@@ -476,6 +477,7 @@ def evaluate_model(
                 continue
 
             q_model = _prepare_model_for_evaluation(model_class, model_path, cfg)
+            q_template = clone_model_via_disk(q_model)
 
             quantize_model(q_model, config=q_cfg)
             q_model.to(device)
@@ -496,6 +498,7 @@ def evaluate_model(
             if finetune:
                 if "finetuned" not in q_entry:
                     finetune_model(q_model)
+
                     q_model = persist_quantization_after_finetune(q_model, q_template, base_config[q_name])
                     q_model.to(device)
 
