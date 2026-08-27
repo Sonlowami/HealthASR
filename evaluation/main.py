@@ -159,36 +159,32 @@ def _get_utterance_ids_for_batch(val_loader, start_idx: int, batch_len: int) -> 
     ids = []
     for offset in range(batch_len):
         try:
-            ids.append(dataset.collection[start_idx + offset].audio_file)
+            ids.append(dataset.manifest_processor.collection[start_idx + offset].audio_file)
         except (AttributeError, IndexError) as exc:
-            print(dataset.collection[start_idx + offset].__dict__)
+            print(dataset.manifest_processor.collection[start_idx + offset].__dict__)
             raise RuntimeError(
                 f"Could not resolve utterance_id for index {start_idx + offset}: {exc}. "
                 "Check dataset.collection[i]'s actual attributes (see verification snippet)."
             ) from exc
     return ids
 
-
 def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str], list[str]]:
-
     model.to(device)
     model.eval()
     references, hypotheses, utterance_ids = [], [], []
-    cursor = 0
+    collection = val_loader.dataset.manifest_processor.collection  # verify this path first, see above
+
     with torch.no_grad():
         for batch in val_loader:
-            signal, signal_len, tokens, token_len = batch
+            signal, signal_len, tokens, token_len, sample_ids = batch  # 5-tuple now that return_sample_id=True
             signal, signal_len = signal.to(device), signal_len.to(device)
 
             output, output_len = model_utils.run_model_forward(model, signal, signal_len)
             hyps = model_utils.get_hypotheses(model, output, output_len)
 
-            batch_len = signal.shape[0]
-            batch_ids = _get_utterance_ids_for_batch(val_loader, cursor, batch_len)
-            cursor += batch_len
-
             tokens_np, token_len_np = tokens.cpu().numpy(), token_len.cpu().numpy()
-            for t, t_len, hyp, utt_id in zip(tokens_np, token_len_np, hyps, batch_ids):
+            sample_ids_np = sample_ids.cpu().numpy() if torch.is_tensor(sample_ids) else sample_ids
+            for t, t_len, hyp, sid in zip(tokens_np, token_len_np, hyps, sample_ids_np):
                 references.append(model.tokenizer.ids_to_text(t[:t_len].tolist()))
                 if hasattr(hyp, "words"):
                     hypotheses.append(" ".join(hyp.words))
@@ -196,7 +192,7 @@ def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str]
                     hypotheses.append(hyp.text)
                 elif isinstance(hyp, str):
                     hypotheses.append(str(hyp))
-                utterance_ids.append(utt_id)
+                utterance_ids.append(collection[int(sid)].audio_file)
     model.train()
     return references, hypotheses, utterance_ids
 
@@ -228,6 +224,7 @@ def setup_validation_for_language(model, cfg, language_code: str) -> None:
     lang_ds_cfg = copy.deepcopy(model.cfg.validation_ds)
     with open_dict(lang_ds_cfg):
         lang_ds_cfg.manifest_filepath = manifest_path
+        lang_ds_cfg.return_sample_id = True
     model.setup_validation_data(lang_ds_cfg)
 
 
