@@ -146,27 +146,52 @@ def measure_model_size_bytes(model) -> int:
         if tmp_path is not None:
             Path(tmp_path).unlink(missing_ok=True)
 
-def _get_utterance_ids_for_batch(val_loader, start_idx: int, batch_len: int) -> list[str]:
+def add_predictions_column(predictions_dir, lang_name, run_label, utterance_ids, references, hypotheses):
     """
-    Pulls a stable per-utterance identifier for one batch, by position, from the
-    underlying dataset's manifest collection -- NOT from the batch tuple itself,
-    which carries no ID. Requires the validation dataloader to be non-shuffled
-    (true by convention for validation, but real enough of an assumption to assert).
-    VERIFY `.collection[i].audio_file` against your actual dataset class before
-    trusting this -- see verification snippet in chat.
+    Merges one model's predictions into the per-language WIDE predictions table,
+    adding a `prediction_{run_label}` column joined on utterance_id -- rather than
+    overwriting a single file with only the latest model's narrow output.
     """
-    dataset = val_loader.dataset
-    ids = []
-    for offset in range(batch_len):
-        try:
-            ids.append(dataset.manifest_processor.collection[start_idx + offset].audio_file)
-        except (AttributeError, IndexError) as exc:
-            print(dataset.manifest_processor.collection[start_idx + offset].__dict__)
-            raise RuntimeError(
-                f"Could not resolve utterance_id for index {start_idx + offset}: {exc}. "
-                "Check dataset.collection[i]'s actual attributes (see verification snippet)."
-            ) from exc
-    return ids
+    path = Path(predictions_dir) / f"{lang_name}_predictions.csv"
+    new_col = f"prediction_{run_label}"
+
+    new_data = pd.DataFrame({
+        "utterance_id": utterance_ids,
+        "reference": references,
+        new_col: hypotheses,
+    })
+
+    if path.exists():
+        existing = pd.read_csv(path)
+        if new_col in existing.columns:
+            print(f"    [predictions] '{new_col}' already present -- overwriting that column only")
+            existing = existing.drop(columns=[new_col])
+        merged = existing.merge(new_data, on=["utterance_id", "reference"], how="outer")
+
+        # If the SAME utterance_id shows up with DIFFERENT reference text between this
+        # model's run and a previous one, the merge key won't match on 'reference' and
+        # utterance_id will appear twice -- surface that loudly rather than silently
+        # producing a corrupted table with split rows.
+        dup_ids = merged["utterance_id"][merged["utterance_id"].duplicated()].unique()
+        if len(dup_ids) > 0:
+            raise ValueError(
+                f"Reference text mismatch for utterance_id(s) {list(dup_ids)[:5]} between "
+                f"existing {path.name} and new '{new_col}' data -- check that text cleaning "
+                "is consistent across model evaluation runs before trusting this table."
+            )
+    else:
+        merged = new_data
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    merged.to_csv(path, index=False)
+
+    n_missing = merged[new_col].isna().sum()
+    if n_missing > 0:
+        print(f"    [predictions] WARNING: {n_missing} rows missing '{new_col}' "
+              f"(utterance present in other models but not this one)")
+    print(f"    [predictions] added column '{new_col}' -> {path} ({len(merged)} rows, "
+          f"{len(merged.columns) - 2} models so far)")
+    return merged
 
 def run_model_inference(model, val_loader, device) -> tuple[list[str], list[str], list[str]]:
     model.to(device)
@@ -267,11 +292,13 @@ def evaluate_model(
     results = existing_result if existing_result is not None else {}
     os.makedirs(save_predictions_dir, exist_ok=True) if save_predictions_dir is not None else None
 
-    def evaluate_languages_for_model(model, device, predictions_dir=save_predictions_dir, run_label=None):
+    def evaluate_languages_for_model(model, device, predictions_dir=save_predictions_dir):
         language_items_local = list(language_codes.items())
         _, first_lang_code_local = language_items_local[0]
         model_utils.setup_model_for_validation(model, cfg)
         setup_validation_for_language(model, cfg, first_lang_code_local)
+        
+        run_label = Path(model_path).stem
 
         per_language = {}
         for i, (lang_name, lang_code) in enumerate(language_items_local):
@@ -283,15 +310,15 @@ def evaluate_model(
             references, hypotheses = clean_references_hypotheses(references, hypotheses)
 
             if predictions_dir is not None:
-                pred_df = pd.DataFrame({
-                    "utterance_id": utterance_ids,
-                    "reference": references,
-                    "prediction": hypotheses,
-                })
-                out_path = Path(predictions_dir) / f"{run_label}_{lang_name}.csv"
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                pred_df.to_csv(out_path, index=False)
-                print(f"    saved predictions -> {out_path}")
+                add_predictions_column(
+                    predictions_dir,
+                    lang_name,
+                    run_label,
+                    utterance_ids,
+                    references,
+                    hypotheses
+                    )
+
 
             evaluator = ASREvaluator()
             evaluator.compute_wer(references, hypotheses)
@@ -369,7 +396,7 @@ def evaluate_model(
     model_size = measure_model_size_bytes(model)
 
     if "baseline" not in results:
-        baseline_language_results = evaluate_languages_for_model(model, device, run_label="baseline")
+        baseline_language_results = evaluate_languages_for_model(model, device)
         baseline_result = {
             "params": params,
             "macs": macs,
@@ -432,7 +459,7 @@ def evaluate_model(
                 prune_params = count_parameters(current_model)
                 prune_size = measure_model_size_bytes(current_model)
                 prune_macs = estimate_macs(current_model, sample_batch)
-                prune_lang_results = evaluate_languages_for_model(current_model, device, run_label=experiment_key)
+                prune_lang_results = evaluate_languages_for_model(current_model, device)
                 score_pruned_languages(prune_lang_results, prune_size)
 
                 prune_entry.update({
@@ -450,7 +477,7 @@ def evaluate_model(
                     prune_ft_params = count_parameters(current_model)
                     prune_ft_size = measure_model_size_bytes(current_model)
                     prune_ft_macs = estimate_macs(current_model, sample_batch)
-                    prune_ft_lang_results = evaluate_languages_for_model(current_model, device, run_label=f"{experiment_key}_finetuned")
+                    prune_ft_lang_results = evaluate_languages_for_model(current_model, device)
                     score_pruned_languages(prune_ft_lang_results, prune_ft_size)
                     prune_entry["finetuned"] = {
                         "params": prune_ft_params,
@@ -479,7 +506,7 @@ def evaluate_model(
                     q_entry = prune_entry["quantization"].setdefault(q_name, {})
                     if "languages" not in q_entry:
                         q_size = measure_model_size_bytes(q_model)
-                        q_lang_results = evaluate_languages_for_model(q_model, device, run_label=f"{experiment_key}_{q_name}")
+                        q_lang_results = evaluate_languages_for_model(q_model, device)
                         score_quantized_languages(q_lang_results, q_size)
 
                         q_entry.update({
@@ -498,7 +525,7 @@ def evaluate_model(
                             q_model.to(device)
 
                             q_ft_size = measure_model_size_bytes(q_model)
-                            q_ft_lang_results = evaluate_languages_for_model(q_model, device, run_label=f"{experiment_key}_{q_name}_finetuned")
+                            q_ft_lang_results = evaluate_languages_for_model(q_model, device)
                             score_quantized_languages(q_ft_lang_results, q_ft_size)
                             q_entry["finetuned"] = {
                                 "languages": q_ft_lang_results,
@@ -526,7 +553,7 @@ def evaluate_model(
             q_entry = quantization_results.setdefault(q_name, {})
             if "languages" not in q_entry:
                 q_size = measure_model_size_bytes(q_model)
-                q_lang_results = evaluate_languages_for_model(q_model, device, run_label=f"{experiment_key}_{q_name}")
+                q_lang_results = evaluate_languages_for_model(q_model, device)
                 score_quantized_languages(q_lang_results, q_size)
 
                 q_entry.update({
@@ -544,7 +571,7 @@ def evaluate_model(
                     q_model.to(device)
 
                     q_ft_size = measure_model_size_bytes(q_model)
-                    q_ft_lang_results = evaluate_languages_for_model(q_model, device, run_label=f"{experiment_key}_{q_name}_finetuned")
+                    q_ft_lang_results = evaluate_languages_for_model(q_model, device)
                     score_quantized_languages(q_ft_lang_results, q_ft_size)
                     q_entry["finetuned"] = {
                         "languages": q_ft_lang_results,
