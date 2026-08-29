@@ -112,6 +112,77 @@ def transcribe_dataset(model, processor, dataset, lang_token_id: int, batch_size
 
 
 @torch.no_grad()
+def transcribe_dataset_for_export(
+    model,
+    processor,
+    dataset,
+    lang_token_id: int,
+    batch_size: int = 32,
+    num_workers: int = 8,
+    max_new_tokens: int = 128,
+):
+    """
+    Decode for CSV export: return (paths, raw_references, raw_hypotheses).
+    Does not apply WER _norm — keeps original reference text and lightly stripped hyps.
+    """
+    device = next(model.parameters()).device
+    language = processor.tokenizer.decode([lang_token_id])
+    was_training = model.training
+    model.eval()
+    gen_logger = logging.getLogger("transformers.generation.utils")
+    prev_gen_level = gen_logger.level
+    gen_logger.setLevel(logging.ERROR)
+
+    class _PathDataset(torch.utils.data.Dataset):
+        def __init__(self, ds):
+            self.paths = ds["audio"]
+            self.texts = ds["text"]
+
+        def __len__(self):
+            return len(self.paths)
+
+        def __getitem__(self, i):
+            return self.paths[i], self.texts[i]
+
+    def _collate(batch):
+        paths, texts = zip(*batch)
+        wavs = [load_audio(p) for p in paths]
+        return list(paths), list(wavs), list(texts)
+
+    loader = DataLoader(
+        _PathDataset(dataset),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=_collate,
+        pin_memory=(device.type == "cuda"),
+        persistent_workers=(num_workers > 0),
+    )
+
+    paths_out, references, hypotheses = [], [], []
+    try:
+        for paths, wavs, texts in tqdm(loader, desc=f"export ({language})"):
+            feats = processor.feature_extractor(
+                wavs, sampling_rate=16000, return_tensors="pt"
+            ).input_features.to(device=device, dtype=model.dtype)
+            with torch.autocast(device.type, torch.bfloat16, enabled=device.type == "cuda"):
+                ids = model.generate(
+                    feats, language=language, task="transcribe",
+                    max_new_tokens=max_new_tokens, num_beams=1,
+                )
+            hyps = processor.batch_decode(ids, skip_special_tokens=True)
+            for path, ref_text, hyp_text in zip(paths, texts, hyps):
+                paths_out.append(str(path))
+                references.append(str(ref_text))
+                hypotheses.append(str(hyp_text).strip())
+    finally:
+        gen_logger.setLevel(prev_gen_level)
+        if was_training:
+            model.train()
+    return paths_out, references, hypotheses
+
+
+@torch.no_grad()
 def score_wer(model, processor, dataset, lang_token_id: int, batch_size: int = 32,
               num_workers: int = 8, max_new_tokens: int = 128):
     """

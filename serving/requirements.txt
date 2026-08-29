@@ -8,3 +8,4 @@ soundfile
 torch
 transformers
 accelerate>=1.1.0
+torchao

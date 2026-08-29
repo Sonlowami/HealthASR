@@ -6,7 +6,7 @@ FastAPI app with interactive docs at **`/docs`**.
 
 | Env | Mode | Behavior |
 |-----|------|----------|
-| `MODEL_PATH` | **local** | Load HF Whisper checkpoint; decode audio → transcribe |
+| `MODEL_PATH` | **local** | HF Whisper `final/` **or** int8 QAT `quantized/` (has `quantized_state_dict.pt`) |
 | `MODEL_URL` | **proxy** | Forward upload to `{MODEL_URL}/v1/asr` (remote deployed model) |
 
 If both are set, **`MODEL_URL` wins** (proxy).
@@ -16,16 +16,30 @@ Languages: `kin` / `kinyarwanda`, `dav` / `kidawida` (Kidaw'ida uses the SALT `s
 ## Setup
 
 ```bash
-conda activate healthasr   # or any env with torch + transformers
+conda activate healthasr   # or: python3 -m venv .venv && source .venv/bin/activate
 pip install -r serving/requirements.txt
 ```
 
-## Run (local model)
+## Run (int8 QAT — recommended for laptop)
+
+Point `MODEL_PATH` at the extracted `quantized/` folder (from `whisper_kin_dav_int8_qat_quantized.tar`):
+
+```bash
+cd /path/to/HealthASR   # repo root
+source .venv/bin/activate   # if using venv
+
+export MODEL_PATH="$HOME/Downloads/quantized"
+# optional: DEVICE=cpu
+python -m uvicorn serving.app:app --host 127.0.0.1 --port 8000 --app-dir .
+```
+
+First start may download Whisper **config** from Hugging Face (`BASE_CONFIG`, default `openai/whisper-large-v3`) — not the full 5 GB weights.
+
+## Run (full HF `final/`)
 
 ```bash
 export MODEL_PATH=/project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-curriculum-e15/final
-# optional: DEVICE=cuda|cpu|auto
-uvicorn serving.app:app --host 0.0.0.0 --port 8000 --app-dir .
+python -m uvicorn serving.app:app --host 0.0.0.0 --port 8000 --app-dir .
 ```
 
 Open: [http://localhost:8000/docs](http://localhost:8000/docs)

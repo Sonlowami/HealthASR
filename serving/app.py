@@ -4,16 +4,21 @@ HealthASR Whisper transcription API (Swagger UI at /docs).
 Modes (env):
   MODEL_URL   — if set, POST /transcribe proxies audio to this remote ASR base URL
                 (expects remote POST {MODEL_URL}/v1/asr with multipart file + language)
-  MODEL_PATH  — local HF Whisper checkpoint dir (used when MODEL_URL is unset)
+  MODEL_PATH  — local HF Whisper `final/` OR a QAT `quantized/` dir
+                (folder with `quantized_state_dict.pt`)
 
   Optional:
   DEVICE=cuda|cpu|auto   (default auto)
-  HOST=0.0.0.0 PORT=8000
+  BASE_CONFIG=openai/whisper-large-v3
+      — HF config id used only when loading int8 QAT (architecture skeleton;
+        quantized weights come from MODEL_PATH; no full FP checkpoint needed)
+  QAT_SCHEME=int8_weight_qat
 """
 from __future__ import annotations
 
 import io
 import os
+import sys
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +28,12 @@ import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+
+# Repo root on sys.path so training.whisper.compression imports work when
+# launched as `uvicorn serving.app:app --app-dir .`
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 # User-facing language → Whisper/SALT lang token id (same as config/*.yaml)
 LANG_TOKEN_IDS = {
@@ -55,8 +66,13 @@ def _resolve_mode() -> Literal["local", "proxy"]:
     if os.environ.get("MODEL_PATH", "").strip():
         return "local"
     raise RuntimeError(
-        "Set MODEL_URL (proxy to remote ASR) or MODEL_PATH (local Whisper checkpoint)."
+        "Set MODEL_URL (proxy to remote ASR) or MODEL_PATH (local Whisper "
+        "final/ or int8 quantized/ folder)."
     )
+
+
+def _is_quantized_dir(path: Path) -> bool:
+    return (path / "quantized_state_dict.pt").is_file()
 
 
 def _load_audio_bytes(data: bytes, filename: str | None = None) -> tuple[np.ndarray, int]:
@@ -73,7 +89,6 @@ def _load_audio_bytes(data: bytes, filename: str | None = None) -> tuple[np.ndar
 
     suffix = Path(filename or "audio.wav").suffix or ".wav"
     try:
-        # soundfile first (wav/flac)
         audio, sr = sf.read(io.BytesIO(data), always_2d=False)
         if getattr(audio, "ndim", 1) > 1:
             audio = np.mean(audio, axis=-1)
@@ -84,7 +99,6 @@ def _load_audio_bytes(data: bytes, filename: str | None = None) -> tuple[np.ndar
     except Exception:
         pass
 
-    # fallback via temp file (mp3/webm/etc.)
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
@@ -100,20 +114,76 @@ def _load_audio_bytes(data: bytes, filename: str | None = None) -> tuple[np.ndar
 class LocalWhisper:
     def __init__(self, model_path: str, device: str):
         import torch
-        from transformers import GenerationConfig, WhisperForConditionalGeneration, WhisperProcessor
+        from transformers import (
+            GenerationConfig,
+            WhisperConfig,
+            WhisperForConditionalGeneration,
+            WhisperProcessor,
+        )
 
         self.device = device
         self.model_path = model_path
-        self.processor = WhisperProcessor.from_pretrained(model_path)
-        self.model = WhisperForConditionalGeneration.from_pretrained(model_path)
-        if not getattr(self.model.generation_config, "lang_to_id", None):
-            self.model.generation_config = GenerationConfig.from_pretrained(
-                "openai/whisper-large-v3"
-            )
-        self.model.generation_config.forced_decoder_ids = None
-        self.model.to(device)
-        self.model.eval()
         self._torch = torch
+        path = Path(model_path)
+
+        if _is_quantized_dir(path):
+            self.model, self.processor = self._load_int8_qat(path, device)
+            print(f"[serving] loaded int8 QAT from {path}", flush=True)
+        else:
+            self.processor = WhisperProcessor.from_pretrained(model_path)
+            self.model = WhisperForConditionalGeneration.from_pretrained(model_path)
+            if not getattr(self.model.generation_config, "lang_to_id", None):
+                self.model.generation_config = GenerationConfig.from_pretrained(
+                    "openai/whisper-large-v3"
+                )
+            self.model.generation_config.forced_decoder_ids = None
+            self.model.to(device)
+            self.model.eval()
+
+    def _load_int8_qat(self, quantized_dir: Path, device: str):
+        """Rebuild torchao int8 weight-only model from quantized_state_dict.pt."""
+        import torch
+        from transformers import (
+            GenerationConfig,
+            WhisperConfig,
+            WhisperForConditionalGeneration,
+            WhisperProcessor,
+        )
+
+        try:
+            from training.whisper.compression.quantize import get_qat_scheme, quantize_model
+        except ImportError as e:
+            raise RuntimeError(
+                "Could not import training.whisper.compression.quantize. "
+                "Run uvicorn from the HealthASR repo root with --app-dir ."
+            ) from e
+
+        scheme = os.environ.get("QAT_SCHEME", "int8_weight_qat").strip()
+        base_config = os.environ.get("BASE_CONFIG", "openai/whisper-large-v3").strip()
+        sd_path = quantized_dir / "quantized_state_dict.pt"
+
+        # Processor was saved next to the state dict; config is large-v3 / SALT-shaped
+        processor = WhisperProcessor.from_pretrained(str(quantized_dir))
+        config = WhisperConfig.from_pretrained(base_config)
+        model = WhisperForConditionalGeneration(config)
+        if not getattr(model.generation_config, "lang_to_id", None):
+            model.generation_config = GenerationConfig.from_pretrained(base_config)
+        model.generation_config.forced_decoder_ids = None
+
+        quantize_model(model, config=get_qat_scheme(scheme)["base"])
+        try:
+            state = torch.load(sd_path, map_location=device, weights_only=True)
+        except TypeError:
+            state = torch.load(sd_path, map_location=device)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if missing:
+            print(f"[serving] load_state_dict missing keys: {len(missing)}", flush=True)
+        if unexpected:
+            print(f"[serving] load_state_dict unexpected keys: {len(unexpected)}", flush=True)
+
+        model.to(device)
+        model.eval()
+        return model, processor
 
     def transcribe(self, audio: np.ndarray, language_key: str, max_new_tokens: int = 128) -> str:
         token_id = LANG_TOKEN_IDS.get(language_key.lower())
@@ -122,7 +192,6 @@ class LocalWhisper:
                 status_code=400,
                 detail=f"Unknown language '{language_key}'. Use: kin, dav (or kinyarwanda, kidawida).",
             )
-        # Match train.py: decode lang token id → string for generate(language=...)
         language = self.processor.tokenizer.decode([token_id])
         inputs = self.processor(audio, sampling_rate=16000, return_tensors="pt")
         input_features = inputs.input_features.to(self.device)
@@ -196,7 +265,8 @@ async def lifespan(app: FastAPI):
         _state["backend"] = LocalWhisper(path, device)
         _state["model"] = path
         _state["device"] = device
-        print(f"[serving] local mode → {path} on {device}", flush=True)
+        kind = "int8-qat" if _is_quantized_dir(Path(path)) else "hf-final"
+        print(f"[serving] local ({kind}) → {path} on {device}", flush=True)
     yield
     _state.clear()
 
@@ -205,12 +275,13 @@ app = FastAPI(
     title="HealthASR Whisper API",
     description=(
         "Transcribe Kinyarwanda (`kin`) or Kidaw'ida (`dav`) audio.\n\n"
-        "- **Local mode:** set `MODEL_PATH` to an HF Whisper `final/` checkpoint.\n"
-        "- **Proxy mode:** set `MODEL_URL` to a remote ASR base that implements "
-        "`POST /v1/asr` (multipart `file` + form `language`).\n\n"
+        "- **Local HF:** `MODEL_PATH` = Whisper `final/` checkpoint.\n"
+        "- **Local int8 QAT:** `MODEL_PATH` = extracted `quantized/` folder "
+        "(contains `quantized_state_dict.pt`).\n"
+        "- **Proxy:** `MODEL_URL` → remote `POST /v1/asr`.\n\n"
         "Open **Swagger UI** at `/docs`."
     ),
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
