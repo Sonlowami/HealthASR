@@ -37,7 +37,11 @@ MAX_LABEL_LEN = 448      # Whisper decoder context limit
 MAX_AUDIO_SEC = 30.0     # Whisper encoder window; longer clips would silently truncate
 
 
-def load_manifest(path: str, audio_dir: str | None = None) -> pd.DataFrame:
+def load_manifest(
+    path: str,
+    audio_dir: str | None = None,
+    drop_long: bool = True,
+) -> pd.DataFrame:
     """Read a TSV/CSV/JSON/JSONL manifest and normalize to columns: audio, text."""
     p = Path(path)
     if p.suffix in (".tsv", ".csv"):
@@ -48,11 +52,19 @@ def load_manifest(path: str, audio_dir: str | None = None) -> pd.DataFrame:
     audio_col = next(cols[c] for c in AUDIO_COLS if c in cols)
     text_col = next(cols[c] for c in TEXT_COLS if c in cols)
     dur_col = next((cols[c] for c in DURATION_COLS if c in cols), None)
-    if dur_col:  # drop clips beyond Whisper's window: audio would truncate but labels wouldn't
+    if drop_long and dur_col:  # Whisper encoder window; export can keep + chunk
         too_long = df[dur_col].astype(float) > MAX_AUDIO_SEC
         if too_long.any():
             print(f"{p.name}: dropping {int(too_long.sum())} clips longer than {MAX_AUDIO_SEC}s")
             df = df[~too_long]
+    elif (not drop_long) and dur_col:
+        n_long = int((df[dur_col].astype(float) > MAX_AUDIO_SEC).sum())
+        if n_long:
+            print(
+                f"{p.name}: keeping {n_long} clips longer than {MAX_AUDIO_SEC}s "
+                f"(chunked decode at export)",
+                flush=True,
+            )
     audio = df[audio_col].astype(str)
     if audio_dir:
         audio = audio.map(lambda a: str(Path(audio_dir) / a))
@@ -62,13 +74,15 @@ def load_manifest(path: str, audio_dir: str | None = None) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
-def build_language_datasets(cfg: dict) -> dict:
+def build_language_datasets(cfg: dict, drop_long: bool = True) -> dict:
     """For each configured language: train/eval Datasets + token id + oversample factor."""
     out = {}
     for name, lc in cfg["languages"].items():
         entry = {"token_id": int(lc["lang_token_id"]), "oversample": int(lc.get("oversample", 1))}
         for split in ("train", "eval"):
-            df = load_manifest(lc[f"{split}_manifest"], lc.get("audio_dir"))
+            df = load_manifest(
+                lc[f"{split}_manifest"], lc.get("audio_dir"), drop_long=drop_long,
+            )
             df["lang_token_id"] = entry["token_id"]
             # "audio" stays a path string; WAVs are read with soundfile at batch time
             entry[split] = Dataset.from_pandas(df, preserve_index=False)

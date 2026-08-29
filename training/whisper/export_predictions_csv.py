@@ -18,9 +18,12 @@ Columns: utterance_id (Orchard audio path), reference (original text), predictio
 
 Example::
 
+  # Full Kin row count (9263): keep >30s clips and chunk-decode
   python training/whisper/export_predictions_csv.py \\
     --config config/whisper_eval_models.yaml \\
-    --output_dir /project/community/rmwisene/pipeline_outputs/whisper_predictions
+    --output_dir /project/community/rmwisene/pipeline_outputs/whisper_predictions \\
+    --keep_long_audio \\
+    --bundles kinyarwanda_kin_only_dev_predictions.csv,kinyarwanda_combined_dev_predictions.csv
 """
 from __future__ import annotations
 
@@ -111,6 +114,11 @@ def main():
         help="Comma list of CSV basenames to run (default: all three). "
         "Example: kinyarwanda_kin_only_dev_predictions.csv",
     )
+    parser.add_argument(
+        "--keep_long_audio",
+        action="store_true",
+        help="Keep clips >30s and chunk-decode them (for full Kin row count vs mate).",
+    )
     args = parser.parse_args()
 
     load_dotenv()
@@ -119,7 +127,19 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     key_to_path = models_by_key(cfg)
-    langs = whisper_train.build_language_datasets(cfg)
+    # Only load languages needed by selected bundles (avoids kidawida work when Kin-only redo)
+    want = None
+    if args.bundles:
+        want = {b.strip() for b in args.bundles.split(",") if b.strip()}
+    lang_needed = {
+        lang for csv_name, lang, _ in BUNDLES
+        if want is None or csv_name in want
+    }
+    cfg_langs = {k: v for k, v in cfg["languages"].items() if k in lang_needed}
+    cfg_use = {**cfg, "languages": cfg_langs}
+    langs = whisper_train.build_language_datasets(
+        cfg_use, drop_long=not args.keep_long_audio,
+    )
 
     ev_cfg = cfg.get("eval") or {}
     cc = cfg.get("curriculum") or {}
@@ -127,12 +147,8 @@ def main():
     num_workers = int(ev_cfg.get("score_num_workers", cc.get("score_num_workers", 16)))
     max_new = int(ev_cfg.get("score_max_new_tokens", cc.get("score_max_new_tokens", 128)))
 
-    want = None
-    if args.bundles:
-        want = {b.strip() for b in args.bundles.split(",") if b.strip()}
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"device={device}", flush=True)
+    print(f"device={device}  keep_long_audio={args.keep_long_audio}", flush=True)
 
     # Cache decode results per (model_key, language) so combined models run once per lang
     cache: dict[tuple[str, str], tuple[list[str], list[str], list[str]]] = {}
