@@ -247,7 +247,8 @@ def resolve_language_codes(requested_languages: list[str]) -> dict[str, str]:
     return resolved
 
 
-def setup_validation_for_language(model, cfg, language_code: str) -> None:
+
+def setup_validation_for_language(model, cfg, language_code: str, return_sample_id: bool = False) -> None:
     manifest_key = f"{language_code}_manifest_filepath"
     manifest_path = cfg["model"]["validation_ds"].get(manifest_key)
     if not manifest_path:
@@ -259,7 +260,7 @@ def setup_validation_for_language(model, cfg, language_code: str) -> None:
     lang_ds_cfg = copy.deepcopy(model.cfg.validation_ds)
     with open_dict(lang_ds_cfg):
         lang_ds_cfg.manifest_filepath = manifest_path
-        lang_ds_cfg.return_sample_id = True
+        lang_ds_cfg.return_sample_id = return_sample_id
     model.setup_validation_data(lang_ds_cfg)
 
 
@@ -306,7 +307,7 @@ def evaluate_model(
         language_items_local = list(language_codes.items())
         _, first_lang_code_local = language_items_local[0]
         model_utils.setup_model_for_validation(model, cfg)
-        setup_validation_for_language(model, cfg, first_lang_code_local)
+        setup_validation_for_language(model, cfg, first_lang_code_local, return_sample_id=True)
         
         run_label = Path(model_path).stem
 
@@ -314,7 +315,7 @@ def evaluate_model(
         for i, (lang_name, lang_code) in enumerate(language_items_local):
             print(f"  -- language: {lang_name} ({lang_code}) --")
             if i > 0:
-                setup_validation_for_language(model, cfg, lang_code)
+                setup_validation_for_language(model, cfg, lang_code, return_sample_id=True)
 
             references, hypotheses, utterance_ids = run_model_inference(model, model._validation_dl, device)
             references, hypotheses = clean_references_hypotheses(references, hypotheses)
