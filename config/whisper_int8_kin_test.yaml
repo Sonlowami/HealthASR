@@ -1,0 +1,24 @@
+# Int8 QAT inference on Kinyarwanda test split.
+# eval_manifest points at test (script reads languages.*.eval).
+
+languages:
+  kinyarwanda:
+    train_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/train_processed_balanced_27h.tsv
+    eval_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/test_processed.tsv
+    audio_dir: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda
+    lang_token_id: 50350
+    oversample: 1
+
+# Architecture / processor source for rebuilding torchao int8 graph
+base_model: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-curriculum-e15/final
+
+# QAT int8 dump (quantized_state_dict.pt + processor files)
+quantized_dir: /project/community/rmwisene/pipeline_outputs/compression/whisper_kin_dav_qat/kin-dav-balanced-27h-curriculum-e15/int8_weight_qat/quantized
+
+qat_scheme: int8_weight_qat
+prediction_key: kin-dav-curriculum-e15-int8-qat
+
+eval:
+  score_batch_size: 32
+  score_num_workers: 16
+  score_max_new_tokens: 128
