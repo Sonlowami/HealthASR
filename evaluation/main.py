@@ -98,8 +98,17 @@ def save_json_file(data: dict, path: str) -> None:
 
 
 def clean_references_hypotheses(references: list[str], hypotheses: list[str]) -> tuple[list[str], list[str]]:
-    cleaned_references = [ref.strip().replace("?", "") for ref in references]
-    cleaned_hypotheses = [hyp.strip().replace("?", "") for hyp in hypotheses]
+    cleaned_references, cleaned_hypotheses = [], []
+    for source in (references, hypotheses):
+        source = [s.replace('\u2047', '', regex=False) for s in source]
+        source = [s.replace(r'[.,:?]', ' ', regex=True) for s in source]
+        source = [s.replace(r'\s+', ' ', regex=True) for s in source]
+        source = [s.strip() for s in source]
+        if source is references:
+            cleaned_references = source
+        else:
+            cleaned_hypotheses = source
+
     return cleaned_references, cleaned_hypotheses
 
 
