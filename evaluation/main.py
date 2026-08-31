@@ -507,6 +507,10 @@ def evaluate_model(
                         and (not finetune or "finetuned" in prune_entry["quantization"][q_name])
                     ):
                         continue
+                    # Only use int8 config for pruning+quantization, since int4/int6 are not supported for pruned models.
+                    if q_name not in ("int8_weight_qat",):
+                        print(f"    Skipping {q_name} for pruning+quantization (not supported for pruned models).")
+                        continue
 
                     q_model = clone_model_via_disk(current_model)
                     q_template = clone_model_via_disk(current_model)
