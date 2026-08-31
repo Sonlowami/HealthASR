@@ -100,12 +100,12 @@ def save_json_file(data: dict, path: str) -> None:
 
 def clean_references_hypotheses(references: list[str], hypotheses: list[str]) -> tuple[list[str], list[str]]:
     cleaned_references, cleaned_hypotheses = [], []
-    for source in (references, hypotheses):
+    for i, source in enumerate((references, hypotheses)):
         source = [re.sub(r'\u2047', '', s) for s in source]
         source = [re.sub(r'[.,:?]', ' ', s) for s in source]
         source = [re.sub(r'\s+', ' ', s) for s in source]
         source = [s.strip() for s in source]
-        if source is references:
+        if i == 0:
             cleaned_references = source
         else:
             cleaned_hypotheses = source
