@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import sys
+import re
 import tempfile
 import pandas as pd
 import os
@@ -100,9 +101,9 @@ def save_json_file(data: dict, path: str) -> None:
 def clean_references_hypotheses(references: list[str], hypotheses: list[str]) -> tuple[list[str], list[str]]:
     cleaned_references, cleaned_hypotheses = [], []
     for source in (references, hypotheses):
-        source = [s.replace('\u2047', '', regex=False) for s in source]
-        source = [s.replace(r'[.,:?]', ' ', regex=True) for s in source]
-        source = [s.replace(r'\s+', ' ', regex=True) for s in source]
+        source = [re.sub(r'\u2047', '', s) for s in source]
+        source = [re.sub(r'[.,:?]', ' ', s) for s in source]
+        source = [re.sub(r'\s+', ' ', s) for s in source]
         source = [s.strip() for s in source]
         if source is references:
             cleaned_references = source
