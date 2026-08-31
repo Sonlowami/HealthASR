@@ -335,6 +335,8 @@ def evaluate_model(
             evaluator.compute_wer(references, hypotheses)
             evaluator.compute_cer(references, hypotheses)
             per_language[lang_name] = evaluator.__to_dict__()
+            setup_validation_for_language(model, cfg, lang_code, return_sample_id=False)
+        setup_validation_for_language(model, cfg, first_lang_code_local, return_sample_id=False)
 
         return per_language
 
