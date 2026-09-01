@@ -3,7 +3,6 @@ import pandas as pd
 from pathlib import Path
 import sys
 import json
-from model_utils import resolve_model_class, load_model
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -11,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	print(f"Added {PROJECT_ROOT} to sys.path")
 
 from evaluation.main import _clean_text_list
+from model_utils import resolve_model_class, load_model
 
 def transcribe_unlabeled_audio(
     model,
