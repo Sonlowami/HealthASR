@@ -141,28 +141,36 @@ def main():
         max_new_tokens=max_new,
     )
 
-    # Metrics on WER-normalized text (same as training eval)
-    refs_n = [" ".join(curriculum._norm(r)) for r in refs]
-    hyps_n = [" ".join(curriculum._norm(h)) for h in hyps]
-    ev = ASREvaluator()
-    ev.compute_wer(refs_n, hyps_n)
-    ev.compute_cer(refs_n, hyps_n)
+    # Metrics only if we have real references
+    n_refs = sum(1 for r in refs if str(r).strip() and str(r).strip().lower() != "nan")
     metrics = {
         "language": lang_name,
         "split": "eval_manifest",
         "n": len(refs),
-        "wer": ev.wer,
-        "cer": ev.cer,
-        "combined_error": ev.to_dict()["combined_error"],
+        "n_with_reference": n_refs,
         "model": pred_key,
         "quantized_dir": str(quantized_dir),
         "base_model": base_model,
         "keep_long_audio": args.keep_long_audio,
     }
-    print(
-        f"WER={ev.wer:.4f}  CER={ev.cer:.4f}  combined_error={metrics['combined_error']:.4f}",
-        flush=True,
-    )
+    if n_refs > 0:
+        refs_n = [" ".join(curriculum._norm(r)) for r in refs]
+        hyps_n = [" ".join(curriculum._norm(h)) for h in hyps]
+        ev = ASREvaluator()
+        ev.compute_wer(refs_n, hyps_n)
+        ev.compute_cer(refs_n, hyps_n)
+        metrics.update({
+            "wer": ev.wer,
+            "cer": ev.cer,
+            "combined_error": ev.to_dict()["combined_error"],
+        })
+        print(
+            f"WER={ev.wer:.4f}  CER={ev.cer:.4f}  combined_error={metrics['combined_error']:.4f}",
+            flush=True,
+        )
+    else:
+        metrics.update({"wer": None, "cer": None, "combined_error": None})
+        print("No references in manifest — skipping WER/CER (hyp-only)", flush=True)
 
     csv_name = args.csv_name or f"{lang_name}_test_int8_qat_predictions.csv"
     write_csv(output_dir / csv_name, paths, refs, hyps, pred_col)

@@ -1,0 +1,19 @@
+# Int8 QAT Whisper on Kidaw'ida test (same quantized dump as Kin int8).
+
+languages:
+  kidawida:
+    train_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/train_processed.tsv
+    eval_manifest: /project/community/rmwisene/pipeline_outputs/processed/kidawida/manifests/test_processed.tsv
+    audio_dir: /project/community/rmwisene/pipeline_outputs/processed/kidawida
+    lang_token_id: 50318
+    oversample: 1
+
+base_model: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-curriculum-e15/final
+quantized_dir: /project/community/rmwisene/pipeline_outputs/compression/whisper_kin_dav_qat/kin-dav-balanced-27h-curriculum-e15/int8_weight_qat/quantized
+qat_scheme: int8_weight_qat
+prediction_key: kin-dav-curriculum-e15-int8-qat
+
+eval:
+  score_batch_size: 32
+  score_num_workers: 16
+  score_max_new_tokens: 128
