@@ -122,7 +122,7 @@ def main(
     output_csv: str | None = None,
 ):
     model_class = resolve_model_class(model_class)
-    model = load_model(model_class, model_path)
+    model = load_model(model_path, model_class)
     return transcribe_unlabeled_audio(
         model=model,
         audio_paths=audio_paths,
