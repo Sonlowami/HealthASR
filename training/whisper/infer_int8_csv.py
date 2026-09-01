@@ -109,7 +109,10 @@ def main():
     # Only load the requested language
     cfg_use = {**cfg, "languages": {lang_name: cfg["languages"][lang_name]}}
     langs = whisper_train.build_language_datasets(
-        cfg_use, drop_long=not args.keep_long_audio,
+        cfg_use,
+        drop_long=not args.keep_long_audio,
+        require_text=False,
+        eval_only=True,
     )
     lang = langs[lang_name]
 

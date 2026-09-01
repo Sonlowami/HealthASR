@@ -147,7 +147,10 @@ def main():
     cfg_langs = {k: v for k, v in cfg["languages"].items() if k in lang_needed}
     cfg_use = {**cfg, "languages": cfg_langs}
     langs = whisper_train.build_language_datasets(
-        cfg_use, drop_long=not args.keep_long_audio,
+        cfg_use,
+        drop_long=not args.keep_long_audio,
+        require_text=False,  # Kin test has audio but no refs
+        eval_only=True,
     )
 
     ev_cfg = cfg.get("eval") or {}

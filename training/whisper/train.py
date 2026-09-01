@@ -41,6 +41,7 @@ def load_manifest(
     path: str,
     audio_dir: str | None = None,
     drop_long: bool = True,
+    require_text: bool = True,
 ) -> pd.DataFrame:
     """Read a TSV/CSV/JSON/JSONL manifest and normalize to columns: audio, text."""
     p = Path(path)
@@ -51,23 +52,35 @@ def load_manifest(
     cols = {c.lower(): c for c in df.columns}
     audio_col = next(cols[c] for c in AUDIO_COLS if c in cols)
     # Prefer the text-like column with the most real (non-null, non-empty) values.
-    # Important: an empty `text` column must not beat a filled `sentence`/`transcript`.
     text_candidates = [cols[c] for c in TEXT_COLS if c in cols]
     if not text_candidates:
-        raise ValueError(f"{p}: no transcript column among {TEXT_COLS}")
-    def _text_score(col: str) -> int:
-        s = df[col]
-        as_str = s.map(lambda x: "" if pd.isna(x) else str(x).strip())
-        return int((as_str != "").sum())
-    text_col = max(text_candidates, key=_text_score)
-    n_ok = _text_score(text_col)
+        if require_text:
+            raise ValueError(f"{p}: no transcript column among {TEXT_COLS}")
+        text_col = None
+        n_ok = 0
+    else:
+        def _text_score(col: str) -> int:
+            s = df[col]
+            as_str = s.map(lambda x: "" if pd.isna(x) else str(x).strip())
+            # Treat literal "nan" from bad exports as empty
+            return int((~as_str.isin(["", "nan", "None"])).sum())
+
+        text_col = max(text_candidates, key=_text_score)
+        n_ok = _text_score(text_col)
+
     if n_ok == 0:
-        raise ValueError(
-            f"{p}: text column {text_col!r} is all null; columns={list(df.columns)}"
+        msg = f"{p}: no non-empty transcripts; columns={list(df.columns)}"
+        if require_text:
+            raise ValueError(msg)
+        print(f"WARNING: {msg} — empty references (hyp-only)", flush=True)
+    else:
+        print(
+            f"{p.name}: using audio={audio_col!r} text={text_col!r} ({n_ok}/{len(df)} non-null)",
+            flush=True,
         )
-    print(f"{p.name}: using audio={audio_col!r} text={text_col!r} ({n_ok}/{len(df)} non-null)", flush=True)
+
     dur_col = next((cols[c] for c in DURATION_COLS if c in cols), None)
-    if drop_long and dur_col:  # Whisper encoder window; export can keep + chunk
+    if drop_long and dur_col:
         too_long = df[dur_col].astype(float) > MAX_AUDIO_SEC
         if too_long.any():
             print(f"{p.name}: dropping {int(too_long.sum())} clips longer than {MAX_AUDIO_SEC}s")
@@ -80,29 +93,48 @@ def load_manifest(
                 f"(chunked decode at export)",
                 flush=True,
             )
+
     audio = df[audio_col].astype(str)
     if audio_dir:
         audio = audio.map(lambda a: str(Path(audio_dir) / a))
-    # Never turn NaN into the literal string "nan"
-    text = df[text_col].where(df[text_col].notna(), "").astype(str)
-    text = text.replace({"nan": "", "None": ""})
+    if text_col is None:
+        text = pd.Series([""] * len(df), index=df.index)
+    else:
+        text = df[text_col].where(df[text_col].notna(), "").astype(str)
+        text = text.replace({"nan": "", "None": ""})
     out = {"audio": audio, "text": text}
     if dur_col:
         out["duration_sec"] = df[dur_col].astype(float)
     return pd.DataFrame(out)
 
 
-def build_language_datasets(cfg: dict, drop_long: bool = True) -> dict:
+def build_language_datasets(
+    cfg: dict,
+    drop_long: bool = True,
+    require_text: bool = True,
+    eval_only: bool = False,
+) -> dict:
     """For each configured language: train/eval Datasets + token id + oversample factor."""
     out = {}
     for name, lc in cfg["languages"].items():
         entry = {"token_id": int(lc["lang_token_id"]), "oversample": int(lc.get("oversample", 1))}
         for split in ("train", "eval"):
+            if eval_only and split == "train":
+                entry[split] = Dataset.from_dict(
+                    {"audio": [], "text": [], "lang_token_id": []}
+                )
+                continue
+            # Hyp-only: allow empty text on eval (e.g. Kin test with no refs)
+            need_text = require_text if split == "eval" else True
+            if eval_only and split == "eval":
+                need_text = require_text
             df = load_manifest(
-                lc[f"{split}_manifest"], lc.get("audio_dir"), drop_long=drop_long,
+                lc[f"{split}_manifest"],
+                lc.get("audio_dir"),
+                drop_long=drop_long,
+                require_text=need_text,
             )
             df["lang_token_id"] = entry["token_id"]
-            # "audio" stays a path string; WAVs are read with soundfile at batch time
             entry[split] = Dataset.from_pandas(df, preserve_index=False)
         out[name] = entry
     return out
