@@ -10,7 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	print(f"Added {PROJECT_ROOT} to sys.path")
 
 from evaluation.main import _clean_text_list
-from model_utils import resolve_model_class, load_model
+from utils.model_utils import resolve_model_class, load_model
 
 def transcribe_unlabeled_audio(
     model,
