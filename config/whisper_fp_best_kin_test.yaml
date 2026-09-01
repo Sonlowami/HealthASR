@@ -1,0 +1,26 @@
+# Full-precision (uncompressed) Whisper inference on Kinyarwanda test.
+# Best bilingual checkpoint (curriculum e15) — same base as int8 QAT.
+# Test has audio but no references → share hyps (+ id); no WER/CER.
+
+languages:
+  kinyarwanda:
+    train_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/train_processed_balanced_27h.tsv
+    eval_manifest: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda/manifests/test_processed.tsv
+    audio_dir: /project/community/rmwisene/datasets/kinyarwanda/kinyarwanda
+    lang_token_id: 50350
+    oversample: 1
+
+models:
+  - key: kin-dav-balanced-27h-curriculum-e15
+    path: /project/community/rmwisene/pipeline_outputs/whisper_runs/kin-dav-balanced-27h-curriculum-e15/final
+
+export_bundles:
+  - file: kinyarwanda_test_fp_curriculum_e15_predictions.csv
+    language: kinyarwanda
+    models:
+      - kin-dav-balanced-27h-curriculum-e15
+
+eval:
+  score_batch_size: 32
+  score_num_workers: 16
+  score_max_new_tokens: 128

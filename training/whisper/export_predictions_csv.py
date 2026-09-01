@@ -127,12 +127,21 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     key_to_path = models_by_key(cfg)
-    # Only load languages needed by selected bundles (avoids kidawida work when Kin-only redo)
+    # Bundles: from config export_bundles: if set, else built-in defaults
+    if cfg.get("export_bundles"):
+        bundles: list[tuple[str, str, list[str]]] = [
+            (b["file"], b["language"], list(b["models"]))
+            for b in cfg["export_bundles"]
+        ]
+    else:
+        bundles = list(BUNDLES)
+
+    # Only load languages needed by selected bundles
     want = None
     if args.bundles:
         want = {b.strip() for b in args.bundles.split(",") if b.strip()}
     lang_needed = {
-        lang for csv_name, lang, _ in BUNDLES
+        lang for csv_name, lang, _ in bundles
         if want is None or csv_name in want
     }
     cfg_langs = {k: v for k, v in cfg["languages"].items() if k in lang_needed}
@@ -184,7 +193,7 @@ def main():
         cache[ck] = (paths, refs, hyps)
         return cache[ck]
 
-    for csv_name, lang_name, model_keys in BUNDLES:
+    for csv_name, lang_name, model_keys in bundles:
         if want is not None and csv_name not in want:
             print(f"Skipping {csv_name}", flush=True)
             continue
