@@ -97,20 +97,19 @@ def save_json_file(data: dict, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def _clean_text_list(texts: list[str]) -> list[str]:
+    """The actual cleaning fix, extracted so both clean_references_hypotheses
+    (pairs) and inference-only code (single list, no references) can share it
+    without either duplicating the regex chain or faking a references list."""
+    texts = [re.sub(r'\u2047', '', s) for s in texts]
+    texts = [re.sub(r'[.,:?]', ' ', s) for s in texts]
+    texts = [re.sub(r'\s+', ' ', s) for s in texts]
+    texts = [s.strip() for s in texts]
+    return texts
+
 
 def clean_references_hypotheses(references: list[str], hypotheses: list[str]) -> tuple[list[str], list[str]]:
-    cleaned_references, cleaned_hypotheses = [], []
-    for i, source in enumerate((references, hypotheses)):
-        source = [re.sub(r'\u2047', '', s) for s in source]
-        source = [re.sub(r'[.,:?]', ' ', s) for s in source]
-        source = [re.sub(r'\s+', ' ', s) for s in source]
-        source = [s.strip() for s in source]
-        if i == 0:
-            cleaned_references = source
-        else:
-            cleaned_hypotheses = source
-
-    return cleaned_references, cleaned_hypotheses
+    return _clean_text_list(references), _clean_text_list(hypotheses)
 
 
 def count_parameters(model) -> int:
@@ -335,7 +334,7 @@ def evaluate_model(
             evaluator.compute_wer(references, hypotheses)
             evaluator.compute_cer(references, hypotheses)
             per_language[lang_name] = evaluator.__to_dict__()
-            setup_validation_for_language(model, cfg, lang_code, return_sample_id=False)
+            setup_validation_for_language(model, cfg, lang_code , return_sample_id=False)
         setup_validation_for_language(model, cfg, first_lang_code_local, return_sample_id=False)
 
         return per_language
@@ -598,6 +597,69 @@ def evaluate_model(
                         save_progress()
 
     return results
+
+def transcribe_unlabeled_audio(
+    model,
+    audio_paths: list[str],
+    device,
+    batch_size: int = 8,
+    run_label: str | None = None,
+    output_csv: str | None = None,
+) -> pd.DataFrame:
+    """
+    Runs inference on audio with NO ground-truth transcript, using NeMo's
+    high-level model.transcribe() API (confirmed signature: `audio=`,
+    `return_hypotheses`, `use_lhotse=True` by default) rather than the
+    manifest-driven run_model_inference() path, which requires a `text`
+    field to build its dataloader.
+
+    Uses whatever decoding strategy is already configured on `model` --
+    does not reset or override it, so it inherits e.g. the beam-search fix
+    if setup_model()/change_decoding_strategy() already ran on this model.
+
+    Returns a DataFrame with columns [utterance_id, prediction] (or
+    prediction_{run_label} if given), and optionally writes it to output_csv.
+    """
+    model.to(device)
+    model.eval()
+
+    with torch.no_grad():
+        raw_output = model.transcribe(
+            audio=audio_paths,
+            batch_size=batch_size,
+            return_hypotheses=False,
+        )
+
+    # TranscriptionReturnType's exact shape isn't nailed down by the signature alone
+    # (some NeMo paths return a bare List[str], others a (hyps, ...) tuple, and
+    # return_hypotheses=False isn't universally guaranteed to suppress Hypothesis
+    # objects for every model class) -- normalize defensively rather than assume.
+    if isinstance(raw_output, tuple):
+        raw_output = raw_output[0]
+
+    predictions = []
+    for item in raw_output:
+        if isinstance(item, str):
+            predictions.append(item)
+        elif hasattr(item, "text"):
+            predictions.append(item.text)
+        elif hasattr(item, "words"):
+            predictions.append(" ".join(item.words))
+        else:
+            raise TypeError(f"Unrecognized transcribe() output element type: {type(item)}")
+
+    predictions = _clean_text_list(predictions)
+
+    col_name = f"prediction_{run_label}" if run_label else "prediction"
+    result_df = pd.DataFrame({"utterance_id": audio_paths, col_name: predictions})
+
+    if output_csv is not None:
+        Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
+        result_df.to_csv(output_csv, index=False)
+        print(f"Saved {len(result_df)} transcripts -> {output_csv}")
+
+    model.train()
+    return result_df
 
 
 def main():
