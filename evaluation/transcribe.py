@@ -115,12 +115,13 @@ def discover_audio_paths_from_dir(audio_dir: str) -> list[str]:
 
 def main(
     model_path: str,
+    model_class: str,
     audio_paths: list[str],
     device: str = "cuda",
     batch_size: int = 4,
     output_csv: str | None = None,
 ):
-    model_class = resolve_model_class(model_path)
+    model_class = resolve_model_class(model_class)
     model = load_model(model_class, model_path, device=device)
     return transcribe_unlabeled_audio(
         model=model,
@@ -133,11 +134,12 @@ def main(
 def build_arg_parser():
     import argparse
     parser = argparse.ArgumentParser(description="Transcribe unlabeled audio with a NeMo ASR model")
+    parser.add_argument("--model_class", type=str, required=True, help="dotted path to the Nemo clas")
     parser.add_argument("--model_path", type=str, required=True, help="Path to the NeMo ASR model (.nemo file)")
     parser.add_argument("--manifest_path", type=str, required=False, help="Path to the manifest file containing audio file paths")
     parser.add_argument("--audio_paths", type=str, nargs="+", required=True, help="List of audio file paths to transcribe")
     parser.add_argument("--audio_base_path", type=str, default="", help="Base path to prepend to audio file paths from the manifest")
-    parser.add_argument("audio_dir", type=str, nargs="?", help="Optional directory containing audio files (if not using manifest)")
+    parser.add_argument("--audio_dir", type=str, nargs="?", help="Optional directory containing audio files (if not using manifest)")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run inference on (e.g., 'cuda' or 'cpu')")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size for inference")
     parser.add_argument("--output_csv", type=str, default=None, help="Optional path to save the output DataFrame as CSV")
@@ -158,7 +160,8 @@ if __name__ == "__main__":
 
     main(
         model_path=args.model_path,
-        audio_paths=args.audio_paths,
+        model_class=args.model_class,
+        audio_paths=audio_paths,
         device=args.device,
         batch_size=args.batch_size,
         output_csv=args.output_csv,
