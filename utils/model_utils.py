@@ -5,6 +5,7 @@ from huggingface_hub import login as hf_login
 import os
 from pathlib import Path
 import sys
+import torch.nn as nn
 from importlib import import_module
 from omegaconf import DictConfig, OmegaConf, open_dict
 import lightning.pytorch as pl
@@ -79,7 +80,7 @@ def create_trainer(cfg: DictConfig) -> pl.Trainer:
     )
     return trainer
 
-def setup_model(model, cfg: DictConfig) -> None:
+def setup_model(model, cfg: DictConfig, change_vocab=True) -> None:
     """
     Set up the model for training or evaluation.
     """
@@ -87,7 +88,7 @@ def setup_model(model, cfg: DictConfig) -> None:
     model_cfg.tokenizer.dir = cfg['model']['tokenizer_dir']
     model_cfg.tokenizer.type = cfg['model']['tokenizer_type']
     model_cfg.train_ds.manifest_filepath = cfg['model']['train_ds']['manifest_filepath']
-model_cfg.validation_ds.manifest_filepath = cfg['model']['validation_ds'].get('dav_manifest_filepath', cfg['model']['validation_ds']['manifest_filepath'])
+    model_cfg.validation_ds.manifest_filepath = cfg['model']['validation_ds'].get('dav_manifest_filepath')
     model_cfg.decoding.strategy = cfg['model']['decoding']['strategy']
 	
 
@@ -102,7 +103,8 @@ model_cfg.validation_ds.manifest_filepath = cfg['model']['validation_ds'].get('d
             ds_cfg.tarred_audio_filepaths = None
             if "shard_manifests" in ds_cfg:
                 ds_cfg.shard_manifests = False
-    model.change_vocabulary(new_tokenizer_dir=model_cfg.tokenizer.dir, new_tokenizer_type=model_cfg.tokenizer.type)
+    if change_vocab:
+        model.change_vocabulary(new_tokenizer_dir=model_cfg.tokenizer.dir, new_tokenizer_type=model_cfg.tokenizer.type)
     model.change_decoding_strategy(decoding_cfg=model_cfg.decoding)
     model_cfg.train_ds.batch_size = 6
     model_cfg.validation_ds.batch_size = 6
@@ -118,7 +120,13 @@ def setup_model_for_validation(model, cfg: DictConfig) -> None:
     Set up the model for evaluation (validation), without touching training data.
     """
     model_cfg = model.cfg
-    model_cfg.validation_ds.batch_size = cfg["model"]["validation_ds"].get("batch_size", 16)
+    if isinstance(model, EncDecRNNTModel):
+        decoding_config = model_cfg.decoding
+        decoding_config.strategy = "beam"
+        decoding_config.beam.beam_size = 2
+        decoding_config.beam.return_best_hypothesis = True
+        model.change_decoding_strategy(decoding_cfg=decoding_config)
+    model_cfg.validation_ds.batch_size = cfg["model"]["validation_ds"].get("batch_size", 32)
 
 def get_hypotheses(model, log_probs_or_encoded, encoded_len):
     """
@@ -135,6 +143,7 @@ def get_hypotheses(model, log_probs_or_encoded, encoded_len):
             encoded_lengths=encoded_len,
             return_hypotheses=True,
         )
+        best_hyp = model.decoding.decode_hypothesis(best_hyp)
         return best_hyp
     else:
         return model.decoding.ctc_decoder_predictions_tensor(log_probs_or_encoded, encoded_len)
@@ -152,4 +161,19 @@ def run_model_forward(model, signal, signal_len):
     else:
         log_probs, encoded_len, _ = model.forward(input_signal=signal, input_signal_length=signal_len)
         return log_probs, encoded_len
-	
+
+
+class _KwargsForwardWrapper(nn.Module):
+    """
+    thop calls the profiled module positionally (model(*inputs)), but
+    NeMo's forward() is decorated with @typecheck() and requires
+    input_signal=/input_signal_length= as keywords. This thin wrapper
+    accepts positional args from thop and forwards them as kwargs to the
+    real model.
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, input_signal, input_signal_length):
+        return self.model.forward(input_signal=input_signal, input_signal_length=input_signal_length)

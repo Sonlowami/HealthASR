@@ -66,21 +66,26 @@ def convert_to_nemo_manifest(input_path, output_path, audio_base_path):
 
     for i, entry in enumerate(tqdm(data, total=len(data))):
         try:
-            audio_file = entry.get("audio_path") or entry.get("path")
-            if audio_file is None:
-                raise KeyError("audio_path/path")
+            audio_file = entry.get("audio_path") or entry.get("path")
+
+            if audio_file is None:
+
+                raise KeyError("audio_path/path")
+
             audio_path = os.path.join(audio_base_path, audio_file)
             if audio_path in seen_paths:
                 skipped_duplicates += 1
                 continue
 
-            transcription = entry['sentence']
-            duration = entry['duration_sec']
+            transcription = entry.get('sentence')
+            clip_id = entry.get('clip_id', entry.get("path"))
+            duration = entry.get('duration_sec', 0.0)
 
             manifest_lines.append({
                 "audio_filepath": audio_path,
                 "duration": float(duration),
-                "text": str(transcription).strip()
+                "clip_id": clip_id,
+                "text": str(transcription).strip() if transcription is not None else ""
             })
             seen_paths.add(audio_path)
             added += 1
